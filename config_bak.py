@@ -13,20 +13,17 @@ Edit 2021 July: v20210625 emline_templates and associated model params
 Edit 2022 May: update reference to published paper 2021MNRAS.508..737T
 """
 import numpy as np
-import os
 
-maindir = os.path.expanduser("~/WORK/qsogen_master/qsogen")
-
-f1 = os.path.join(maindir,'qsosed_emlines_20210625.dat')
+f1 = 'qsosed_emlines_20210625.dat'
 emline_template = np.genfromtxt(f1, unpack=True)
 # wav, median_emlines, continuum, peaky_line, windy_lines, narrow_lines
 
-f2 = os.path.join(maindir,'S0_template_norm.sed')
+f2 = 'S0_template_norm.sed'
 galaxy_template = np.genfromtxt(f2, unpack=True)
 # S0 galaxy template from SWIRE
 # https://ui.adsabs.harvard.edu/abs/2008MNRAS.386..697R/
 
-f3 = os.path.join(maindir,'pl_ext_comp_03.sph')
+f3 = 'pl_ext_comp_03.sph'
 reddening_curve = np.genfromtxt(f3, unpack=True)
 # Extinction curve, format: [lambda, E(lambda-V)/E(B-V)]
 # Recall flux_reddened(lambda) = flux(lambda)*10^(-A(lambda)/2.5)
@@ -34,36 +31,32 @@ reddening_curve = np.genfromtxt(f3, unpack=True)
 # so taking R=3.1, A(lambda) = E(B-V)*[Col#2 + 3.1]
 
 # fit to DR16Q median 2sigma-clipped colours in multi-imag bins
-params = dict(z = 0,
-              ebv = 0,
-              M_i = None,
-              plslp1=-0.349,
+params = dict(plslp1=-0.349,
               plslp2=0.593,
               plbrk1=3880.,
               tbb=1243.6,
               bbnorm=3.961,
               scal_emline=-0.9936,
+              M_i=None,
               beslope=0.183,
               fragal=0.244,
               gplind=0.684,
-              LogL3000 = None)
-
-frozen_params = dict(plstep=-1.0,    # (not fit for)
-                     plbrk3=1200,   # (not fit for)
-                     emline_type=None,
-                     scal_halpha=1.,
-                     scal_lya=1.,
-                     scal_nlr=1.,
-                     emline_template=emline_template,
-                     galaxy_template=galaxy_template,
-                     reddening_curve=reddening_curve,
-                     zlum_lumval=np.array([[0.23, 0.34, 0.6, 1.0, 1.4, 1.8, 2.2,
+              plstep=-1.0,    # (not fit for)
+              plbrk3=1200,   # (not fit for)
+              emline_type=None,
+              scal_halpha=1.,
+              scal_lya=1.,
+              scal_nlr=1.,
+              emline_template=emline_template,
+              galaxy_template=galaxy_template,
+              reddening_curve=reddening_curve,
+              zlum_lumval=np.array([[0.23, 0.34, 0.6, 1.0, 1.4, 1.8, 2.2,
                                      2.6, 3.0, 3.3, 3.7, 4.13, 4.5],
                                     [-21.76, -22.9, -24.1, -25.4, -26.0,
                                      -26.6, -27.1, -27.6, -27.9, -28.1, -28.4,
                                      -28.6, -28.9]]),
-                     benorm=-27.,    # (not fit for)
-                     bcnorm=False,
-                     lyForest=True,
-                     lylim=912,   # (not fit for)
-                     gflag=True)
+              benorm=-27.,    # (not fit for)
+              bcnorm=False,
+              lyForest=True,
+              lylim=912,   # (not fit for)
+              gflag=True)

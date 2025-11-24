@@ -39,10 +39,8 @@ And then run the SED model many times, using filter wav arrays as input wavlen:
 """
 
 import numpy as np
-import os
-from scipy.integrate import simpson
-from .qsosed import Quasar_sed
-
+from scipy.integrate import simps
+from qsogen.qsosed import Quasar_sed
 
 # assume 2007 Vega spectrum has zero magnitude in all bands
 Vega_zeropoints = dict(
@@ -189,7 +187,7 @@ for band in ['GALEX_NUV',
     try:
         wavarr, response = np.genfromtxt(band+'.filter', unpack=True)
     except OSError:
-        wavarr, response = np.genfromtxt(os.path.expanduser("~/WORK/qsogen_master/qsogen/filters/")+band+'.filter', unpack=True)
+        wavarr, response = np.genfromtxt('filters/'+band+'.filter', unpack=True)
     wavarrs[band] = wavarr
     resparrs[band] = response
 
@@ -379,7 +377,7 @@ def sed2mags(filters, waves, fluxes, responses):
         mags = np.full(len(waves), np.nan)
 
         for i in range(len(waves)):
-            flux = simpson(waves[i]*responses[i]*fluxes[i], waves[i])
+            flux = simps(waves[i]*responses[i]*fluxes[i], waves[i])
             mags[i] = -2.5*np.log10(flux/zeropoints[filters[i]])
 
         return(mags)
@@ -448,77 +446,18 @@ def produce_zeropoints(system='Vega',
         fluxes = [np.interp(wav, wav_Vega, flux_Vega) for wav in waves]
 
         for i in range(len(filters)):
-            F = simpson(waves[i]*responses[i]*fluxes[i], waves[i])
+            F = simps(waves[i]*responses[i]*fluxes[i], waves[i])
             print('    ' + filters[i] + '_Vega={:.6e},'.format(F))
 
     elif system == 'AB':
         const = 0.1088544752  # 3631Jy in erg/s/cm2/A
         # AB system has constant f_nu, so convert to f_lambda
         for i in range(len(filters)):
-            F = const*simpson(waves[i]**(-1)*responses[i], waves[i])
+            F = const*simps(waves[i]**(-1)*responses[i], waves[i])
             print('    ' + filters[i] + '_AB={:.6e},'.format(F))
     else:
         raise Exception('System must be "Vega" or "AB"')
     print(')')
-
-
-def get_filters_properties(filters = ['SDSS_u_AB',
-                                    'SDSS_g_AB',
-                                    'SDSS_r_AB',
-                                    'SDSS_i_AB',
-                                    'SDSS_z_AB',
-                                    'UKIDSS_Y_Vega',
-                                    'UKIDSS_J_Vega',
-                                    'UKIDSS_H_Vega',
-                                    'UKIDSS_K_Vega',
-                                    'WISE_W1_Vega',
-                                    'WISE_W2_Vega']):
-    waves, responses, zero_points = [], [], []
-    for band in filters:
-        zero_points.append(zeropoints[band])
-        band = band.replace('_AB', '').replace('_Vega', '')
-        waves.append(wavarrs[band])
-        responses.append(resparrs[band])
-        
-
-    obs_wavlen = np.concatenate(waves)
-    order = np.argsort(obs_wavlen)
-    isort = order.argsort()
-    split_indices = np.cumsum([len(wav) for wav in waves[:-1]])
-
-    return waves, responses, zero_points, obs_wavlen, order, isort, split_indices
-
-
-
-def get_colours_fast(redshifts, M_i, filters_properties, **kwargs):
-    waves, responses, zero_points, obs_wavlen, order, isort, split_indices = filters_properties
-    model_colours = []
-
-    for z, mi in zip(np.atleast_1d(redshifts), np.atleast_1d(M_i), strict=True):
-        rest_ordered_wav = obs_wavlen[order] / (1 + z)
-        ordered_flux = Quasar_sed(wavlen=rest_ordered_wav, z=z, M_i = mi, **kwargs).flux
-        if ordered_flux.ndim == 1:
-            ordered_flux = ordered_flux[None,:]
-        flux_original = ordered_flux[:, isort]
-        fluxes = np.split(flux_original, split_indices, axis = 1)
-        colors = -np.diff(sed2mags_fast(waves, fluxes, responses, zero_points), axis =1)
-        model_colours.append(colors if colors.ndim ==2 else colors[None, :])
-    return(np.array(model_colours))   
-
-
-def sed2mags_fast(waves, fluxes, responses, zero_points):
-        
-        if fluxes[0].ndim == 1:
-            fluxes = [f[None, :] for f in fluxes]
-        Nmodels = fluxes[0].shape[0]
-        mags = np.full((Nmodels, len(waves)), np.nan)
-
-        for i in range(len(waves)):
-            flux = simpson(waves[i]*responses[i]*fluxes[i], waves[i], axis = 1)
-            mags[:,i] = -2.5*np.log10(flux/zero_points[i])
-
-        return(mags)
-
 
 
 if __name__ == '__main__':

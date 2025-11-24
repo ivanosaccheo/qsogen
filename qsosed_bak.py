@@ -15,22 +15,19 @@ This version first created 2019 Feb 07; last updated 2021 Mar 13.
 """
 import numpy as np
 from scipy.integrate import quad
-from scipy.interpolate import interp1d
 from astropy.convolution import Gaussian1DKernel, convolve
-from .config import params as default_params
-from .config import frozen_params as default_frozen
 
 _c_ = 299792458.0   # speed of light in m/s
 
 
-def four_pi_dL_sq(redshift):
+def four_pi_dL_sq(z):
     """Compute luminosity distance for flux-luminosity conversion."""
 
     def integrand(z):
         return (0.27*(1+z)**3 + 0.73)**(-0.5)
 
-    value = np.atleast_1d([quad(integrand, 0, z)[0] for z in redshift])
-    Log_d_L = (np.log10(1.303e+28) + np.log10(1+redshift) + np.log10(value))
+    value, err = quad(integrand, 0, z)
+    Log_d_L = (np.log10(1.303e+28) + np.log10(1+z) + np.log10(value))
     # this is log10(c/H0)*(1+z)*(integral) in cgs units with
     # Omega_m=0.27, Omega_lambda=0.73, Omega_k=0, H_0=71 km/s/Mpc
 
@@ -39,15 +36,12 @@ def four_pi_dL_sq(redshift):
 
 def pl(wavlen, plslp, const):
     """Define power-law in flux density per unit frequency."""
-    plslp = np.atleast_1d(plslp)
-    const=  np.atleast_1d(const)
-    wavlen = np.atleast_1d(wavlen)
-    result = const[:,None]*(wavlen[None,:]**plslp[:,None])
-    return result.squeeze()
+    return const*wavlen**plslp
 
 
 def bb(tbb, wav):
     """Blackbody shape in flux per unit frequency.
+
     Parameters
     ----------
     tbb
@@ -64,10 +58,8 @@ def bb(tbb, wav):
     -----
     h*c/k_b = 1.43877735e8 KelvinAngstrom
     """
-    tbb = np.atleast_1d(tbb)
-    wav = np.atleast_1d(wav)
-    result = (wav**(-3))/(np.exp(1.43877735e8 / (wav[None,:]*tbb[:,None])) - 1.0)
-    return result.squeeze()
+    return (wav**(-3))/(np.exp(1.43877735e8 / (tbb*wav)) - 1.0)
+
 
 def tau_eff(z):
     """Ly alpha optical depth from Becker et al. 2013MNRAS.430.2067B."""
@@ -100,7 +92,11 @@ class Quasar_sed:
 
     """
     def __init__(self,
+                 z=2,
+                 LogL3000=46,
                  wavlen=np.logspace(2.95, 4.48, num=20001, endpoint=True),
+                 ebv=0.,
+                 params=None,
                  **kwargs):
         """Initialises an instance of the Quasar SED model.
 
@@ -131,6 +127,10 @@ class Quasar_sed:
             to control scaling of emission-line and host-galaxy contributions.
             Default is to use the relevant luminosity from `zlum_lumval`, which
             gives a smooth scaling with redshift `z`.
+        params : dict, optional
+            Dictionary of additional parameters, including emission-line and
+            host-galaxy template SEDs, reddening curve. Default is to read in
+            from config.py file.
 
         Other Parameters
         ----------------
@@ -185,31 +185,55 @@ class Quasar_sed:
             Default is an S0 galaxy template from the SWIRE library.
 
         """
-
-        self.params = default_params.copy()  
-        self.frozen_params = default_frozen.copy()   # avoid overwriting params dict with kwargs
+        if params is None:
+            from config import params
+        _params = params.copy()  # avoid overwriting params dict with kwargs
         for key, value in kwargs.items():
-            if key in self.params:
-                self.params[key] = value
-            elif key in self.frozen_params:
-                self.frozen_params[key] = value
-            else:
-                print(f'Warning: "{key}" not recognised as a kwarg')
-        self.params = self._broadcast_params(self.params)
+            if key not in _params.keys():
+                print('Warning: "{}" not recognised as a kwarg'.format(key))
+            _params[key] = value
+        self.params = _params
+
+        self.z = max(float(z), 0.005)
+        # avoid crazy flux normalisation at zero redshift
 
         self.wavlen = wavlen
         if np.any(self.wavlen[:-1] > self.wavlen[1:]):
-            raise ValueError('wavlen must be monotonic')
-        
-        self.z = self.params["z"]
-        self.z = np.maximum(self.z, 0.005)
-        self.ebv = self.params["ebv"]
-        
-        if self.params['M_i'] is not None:
-            self.M_i = self.params['M_i']
+            raise Exception('wavlen must be monotonic')
+        self.flux = np.zeros_like(self.wavlen)
+        self.host_galaxy_flux = np.zeros_like(self.wavlen)
+
+        self.ebv = ebv
+        self.plslp1 = _params['plslp1']
+        self.plslp2 = _params['plslp2']
+        self.plstep = _params['plstep']
+        self.tbb = _params['tbb']
+        self.plbrk1 = _params['plbrk1']
+        self.plbrk3 = _params['plbrk3']
+        self.bbnorm = _params['bbnorm']
+        self.scal_emline = _params['scal_emline']
+        self.emline_type = _params['emline_type']
+        self.scal_halpha = _params['scal_halpha']
+        self.scal_lya = _params['scal_lya']
+        self.scal_nlr = _params['scal_nlr']
+
+        self.emline_template = _params['emline_template']
+        self.reddening_curve = _params['reddening_curve']
+        self.galaxy_template = _params['galaxy_template']
+
+        self.beslope = _params['beslope']
+        self.benorm = _params['benorm']
+        self.bcnorm = _params['bcnorm']
+        self.fragal = _params['fragal']
+        self.gplind = _params['gplind']
+
+        self.zlum = _params['zlum_lumval'][0]
+        self.lumval = _params['zlum_lumval'][1]
+
+        if _params['M_i'] is not None:
+            self.M_i = _params['M_i']
         else:
-            self.M_i = np.interp(self.z, self.frozen_params['zlum_lumval'][0], 
-                                 self.frozen_params['zlum_lumval'][1])
+            self.M_i = np.interp(self.z, self.zlum, self.lumval)
 
         #######################################################
         # READY, SET, GO!
@@ -217,45 +241,40 @@ class Quasar_sed:
 
         self.set_continuum()
         self.add_blackbody()
-        
-        if self.frozen_params['bcnorm']:
+        if self.bcnorm:
             self.add_balmer_continuum()
-        
-        if self.params["LogL3000"] is not None:
-            self.f3000 = (10**(self.params["LogL3000"] - four_pi_dL_sq(self.z))
+        if LogL3000 is not None:
+            self.f3000 = (10**(LogL3000 - four_pi_dL_sq(self.z))
                           / (3000*(1 + self.z)))
             self.convert_fnu_flambda(flxnrm=self.f3000, wavnrm=3000)
         else:
             self.convert_fnu_flambda()
 
         self.add_emission_lines()
-        
-        if self.frozen_params['gflag']:
-            # creates self.host_galaxy_flux object need to create this before reddening qso to get correct normalisation
+        if _params['gflag']:
             self.host_galaxy()
-        
+        # creates self.host_galaxy_flux object
+        # need to create this before reddening qso to get correct normalisation
+
         # redden spectrum if E(B-V) != 0
-        if np.any(self.ebv >0):
+        if self.ebv:
             self.redden_spectrum()
 
         # add in host galaxy flux
-        if self.frozen_params['gflag']:
-            self.flux = self.flux + self.host_galaxy_flux
+        if _params['gflag']:
+            self.flux += self.host_galaxy_flux
 
         # simulate the effect of a Lyman limit system at rest wavelength Lylim
         # by setting flux equal to zero at wavelengths < Lylim angstroms
-        if self.frozen_params['lyForest']:
-            lylim = self.wav2num(self.frozen_params['lylim'])
-            self.flux[:, :lylim] = 0.0
-            if hasattr(self, "host_galaxy_flux"):
-                self.host_galaxy_flux[:, :lylim] = 0.0
+        if _params['lyForest']:
+            lylim = self.wav2num(_params['lylim'])
+            self.flux[:lylim] = 0.0
+            self.host_galaxy_flux[:lylim] = 0.0
             # Then add in Ly forest absorption at z>1.4
             self.lyman_forest()
 
         # redshift spectrum
-        self.wavred = (self.z[:,None] + 1)*self.wavlen
-        self.flux = self.flux.squeeze()
-        self.wavred = self.wavred.squeeze()
+        self.wavred = (self.z + 1)*self.wavlen
 
     def wav2num(self, wav):
         """Convert a wavelength to an index."""
@@ -269,55 +288,47 @@ class Quasar_sed:
         works before the emission lines are added to the model, and so wav2flux
         should only be used with a reasonably dense wavelength array.
         """
-        wav = np.atleast_1d(wav)
-
-        f_interp = interp1d(self.wavlen, self.flux, kind='linear', axis=1,
-                            bounds_error=False, fill_value="extrapolate")
-        return f_interp(wav).squeeze()
+        return np.interp(wav, self.wavlen, self.flux)
 
     def set_continuum(self, flxnrm=1.0, wavnrm=5500):
         """Set multi-powerlaw continuum in flux density per unit frequency."""
         # Flip signs of powerlaw slopes to enable calculation to be performed
         # as a function of wavelength rather than frequency
+        sl1 = -self.plslp1
+        sl2 = -self.plslp2
+        wavbrk1 = self.plbrk1
 
-        sl1 = -self.params['plslp1']
-        sl2 = -self.params['plslp2']
-        wavbrk1 = self.params['plbrk1']
-   
         # Define normalisation constant to ensure continuity at wavbrk
         const2 = flxnrm/(wavnrm**sl2)
         const1 = const2*(wavbrk1**sl2)/(wavbrk1**sl1)
 
         # Define basic continuum using the specified normalisation fnorm at
         # wavnrm and the two slopes - sl1 (<wavbrk) sl2 (>wavbrk)
-
-        mask = self.wavlen[None,:] < wavbrk1[:,None]
-        fluxtemp = np.where(mask,
+        fluxtemp = np.where(self.wavlen < wavbrk1,
                             pl(self.wavlen, sl1, const1),
                             pl(self.wavlen, sl2, const2))
 
         # Also add steeper power-law component for sub-Lyman-alpha wavelengths
-        sl3 = sl1 - self.frozen_params['plstep']
-        wavbrk3 = self.frozen_params['plbrk3']
+        sl3 = sl1 - self.plstep
+        wavbrk3 = self.plbrk3
         # Define normalisation constant to ensure continuity
         const3 = const1*(wavbrk3**sl1)/(wavbrk3**sl3)
-        
-        mask = self.wavlen[None,:] < wavbrk3
-        self.flux = np.where(mask,
+
+        self.flux = np.where(self.wavlen < wavbrk3,
                              pl(self.wavlen, sl3, const3),
                              fluxtemp)
 
     def add_blackbody(self, wnorm=20000.):
         """Add basic blackbody spectrum to the flux distribution."""
-        bbnorm = self.params['bbnorm']  # blackbody normalisation at wavelength wnorm
-        tbb = self.params['tbb']
-        mask = bbnorm > 0
-        if np.any(mask):
+        bbnorm = self.bbnorm  # blackbody normalisation at wavelength wnorm
+        tbb = self.tbb
+
+        if bbnorm > 0:
+
             bbval = bb(tbb, wnorm)
-            cmult = np.zeros_like(bbnorm)
             cmult = bbnorm / bbval
-            bb_flux = cmult[:, None]*bb(tbb, self.wavlen)
-            self.flux = self.flux + bb_flux
+            bb_flux = cmult*bb(tbb, self.wavlen)
+            self.flux += bb_flux
 
     def add_balmer_continuum(self,
                              tbc=15000., taube=1., wavbe=3646.,
@@ -335,11 +346,11 @@ class Quasar_sed:
         bcnorm
             Normalisation of the BC at wavelength wnorm Angstroms.
         """
-        fnorm = self.frozen_params['bcnorm']
+        fnorm = self.bcnorm
 
-        nuzero = _c_/(wavbe*1.0e-10)
+        flux_bc = np.zeros_like(self.flux)
 
-        # frequency of Balmer edge
+        nuzero = _c_/(wavbe*1.0e-10)  # frequency of Balmer edge
         # calculate required normalisation constant at wavelength wnorm
 
         bbval = bb(tbc, wnorm)
@@ -347,43 +358,35 @@ class Quasar_sed:
         tau = taube * (nuzero/nu)**3    # tau is the optical depth at wnorm
         if tau < 50:
             bbval = bbval * (1.0 - np.exp(-tau))
-        cmult = fnorm/bbval # everything here is scalar
+        cmult = fnorm/bbval
 
-        nu_grid = _c_ / self.wavlen
-        tau_grid = taube * (nuzero/nu_grid) ** 3
-        scfact = np.ones_like(tau_grid)
-        mask = tau_grid <= 50
-        scfact[mask] = 1.0 - np.exp(-tau_grid[mask])
+        nu = _c_ / self.wavlen
+        tau = taube * np.power(nuzero/nu, 3)
+        scfact = np.ones(len(flux_bc), dtype=np.float64)
+        scfact[tau <= 50.0] = 1.0 - np.exp(-tau[tau <= 50.0])
+        bwav = tuple([self.wavlen < wavbe])
+        flux_bc[bwav] = cmult * scfact[bwav] * bb(tbc, self.wavlen[bwav])
 
-        bb_flux = bb(tbc, self.wavlen)   # shape (Nwav,)
-        flux_bc = cmult * scfact * bb_flux
-        flux_bc[self.wavlen >= wavbe] = 0
-        
         # now broaden bc to simulate effect of bulk-velocity shifts
         vsigma = vfwhm / 2.35
         wsigma = wavbe * vsigma*1e3 / _c_  # change vsigma from km/s to m/s
-        wnum = self.wav2num(wnorm)
-        winc = (self.wavlen[wnum]- self.wavlen[wnum - 1])
+        winc = (self.wavlen[self.wav2num(wnorm)]
+                - self.wavlen[self.wav2num(wnorm) - 1])
         psigma = wsigma / winc     # winc is wavelength increment at wnorm
         gauss = Gaussian1DKernel(stddev=psigma)
         flux_bc = convolve(flux_bc, gauss)
         # Performs a Gaussian smooth with dispersion psigma pixels
+
         # Determine height of power-law continuum at wavelength wnorm to
         # allow correct scaling of Balmer continuum contribution
-        norm = np.atleast_1d(self.wav2flux(wnorm))
-        self.flux = self.flux + flux_bc[None, :] * norm[:,None]
-
+        self.flux += flux_bc*self.wav2flux(wnorm)
 
     def convert_fnu_flambda(self, flxnrm=1.0, wavnrm=5100):
         """Convert f_nu to f_lamda, using c/lambda^2 conversion.
         Normalise such that f_lambda(wavnrm) is equal to flxnrm.
         """
-        flux = self.flux
-        flux = flux * self.wavlen[None, :]**(-2)
-        f_ref = self.wav2flux(wavnrm)  
-        norm_factor = np.atleast_1d(flxnrm / f_ref)[:,None]
-        flux = flux * norm_factor
-        self.flux = flux 
+        self.flux = self.flux*self.wavlen**(-2)
+        self.flux = self.flux*flxnrm/self.wav2flux(wavnrm)
 
     def add_emission_lines(self, wavnrm=5500, wmin=6000, wmax=7000):
         """Add emission lines to the model SED.
@@ -405,131 +408,118 @@ class Quasar_sed:
         through the parameter scal_halpha, and the ability to rescale the
         narrow [OIII], Hbeta, etc emission is included through scal_nlr.
         """
-        scalin = self.params['scal_emline']
-        scahal = self.frozen_params['scal_halpha']
-        scalya = self.frozen_params['scal_lya']
-        scanlr = self.frozen_params['scal_nlr']
-        beslope = self.params['beslope']
-        benrm = self.frozen_params['benorm']
+        scalin = self.scal_emline
+        scahal = self.scal_halpha
+        scalya = self.scal_lya
+        scanlr = self.scal_nlr
+        beslp = self.beslope
+        benrm = self.benorm
 
-        flux = self.flux
+        if self.emline_type is None:
+            if beslp:
+                vallum = self.M_i
+                self.emline_type = (vallum - benrm)*beslp
+            else:
+                self.emline_type = 0.  # default median emlines
 
-        if self.frozen_params["emline_type"] is None:
-            varlin = (self.M_i - benrm) * beslope 
+        varlin = self.emline_type
+
+        linwav, medval, conval, pkyval, wdyval, nlr = self.emline_template
+
+        if varlin == 0.:
+            # average emission line template for z~2 SDSS DR16Q-like things
+            linval = medval + (scanlr-1.)*nlr
+        elif varlin > 0:
+            # high EW emission line template
+            varlin = min(varlin, 3.)
+            linval = varlin*pkyval + (1-varlin)*medval + (scanlr-1.)*nlr
         else:
-            varlin = self.frozen_params["emline_type"]
+            # highly blueshifted emission lines
+            varlin = min(abs(varlin), 2.)
+            linval = varlin*wdyval + (1-varlin)*medval + (scanlr-1.)*nlr
 
-        varlin = np.atleast_1d(varlin)
-        linwav, medval, conval, pkyval, wdyval, nlr = self.frozen_params['emline_template']
-
-        if varlin.size == 1:
-            linval = np.where(varlin[0] == 0,
-                      medval + (scanlr - 1.0) * nlr,
-                      np.where(varlin[0] > 0,
-                               np.minimum(varlin[0], 3.0) * pkyval +
-                               (1 - np.minimum(varlin[0], 3.0)) * medval +
-                               (scanlr - 1.0) * nlr,
-                               np.minimum(np.abs(varlin[0]), 2.0) * wdyval +
-                               (1 - np.minimum(np.abs(varlin[0]), 2.0)) * medval +
-                               (scanlr - 1.0) * nlr))[None,:]
-        else:
-            medval = np.broadcast_to(medval, (self.Nmodels, len(medval)))
-            pkyval = np.broadcast_to(pkyval, (self.Nmodels, len(pkyval)))
-            wdyval = np.broadcast_to(wdyval, (self.Nmodels, len(wdyval)))
-            nlr = np.broadcast_to(nlr, (self.Nmodels, len(nlr)))
-            linval = np.where(varlin[:, None] == 0,
-                      medval + (scanlr - 1.0) * nlr,
-                      np.where(varlin[:, None] > 0,
-                               np.minimum(varlin[:, None], 3.0) * pkyval +
-                               (1 - np.minimum(varlin[:, None], 3.0)) * medval +
-                               (scanlr - 1.0) * nlr,
-                               np.minimum(np.abs(varlin[:, None]), 2.0) * wdyval +
-                               (1 - np.minimum(np.abs(varlin[:, None]), 2.0)) * medval +
-                               (scanlr - 1.0) * nlr))
-        
         # remove negative dips from extreme extrapolation (i.e. abs(varlin)>>1)
+        linval[(linwav > 4930) & (linwav < 5030) & (linval < 0.)] = 0.
+        linval[(linwav > 1150) & (linwav < 1200) & (linval < 0.)] = 0.
 
-        mask = ((linwav > 4930) & (linwav < 5030)) | ((linwav > 1150) & (linwav < 1200))
-        linval[:,mask] = np.maximum(linval[:, mask], 0.0)
-
-        interp_func = interp1d(linwav, linval, kind='linear', axis=1,
-                           bounds_error=False, fill_value="extrapolate")
-        linval_interp = np.atleast_2d(interp_func(self.wavlen))  # shape: (1 or Nmodel, Nwav_model)
-        conval_interp = np.interp(self.wavlen, linwav, conval)
-
+        linval = np.interp(self.wavlen, linwav, linval)
+        conval = np.interp(self.wavlen, linwav, conval)
 
         imin = self.wav2num(wmin)
         imax = self.wav2num(wmax)
-        scatmp = np.ones_like(self.wavlen)
-        scatmp[imin:imax] *= np.abs(scahal)
-        scatmp[:self.wav2num(1350)] *= np.abs(scalya)
+        _scatmp = abs(scalin)*np.ones(len(self.wavlen))
+        _scatmp[imin:imax] = _scatmp[imin:imax]*abs(scahal)
+        _scatmp[:self.wav2num(1350)] = _scatmp[:self.wav2num(1350)]*abs(scalya)
 
+        # Intensity scaling
+        if scalin >= 0:
+            # Normalise such that continuum flux at wavnrm equal to that
+            # of the reference continuum at wavnrm
+            self.flux += (_scatmp * linval *
+                          self.flux[self.wav2num(wavnrm)] /
+                          conval[self.wav2num(wavnrm)])
+            # Ensure that -ve portion of emission line spectrum hasn't
+            # resulted in spectrum with -ve fluxes
+            self.flux[self.flux < 0.0] = 0.0
 
-        if linval_interp.shape[0] == 1 and (flux.shape[0] > 1):
-            linval_interp =  np.broadcast_to(linval_interp, (self.Nmodels, linval_interp.shape[1])).copy()
-        elif (flux.shape[0] == 1) and (linval_interp.shape[0] > 1):
-            flux = np.broadcast_to(flux, (self.Nmodels, flux.shape[1])).copy()
-
-        if (scalin.shape[0] == 1) and (flux.shape[0] > 1):
-            scalin = np.broadcast_to(scalin, self.Nmodels ).copy()
-        elif (flux.shape[0] == 1) and (scalin.shape[0] > 1):
-            flux = np.broadcast_to(flux, (self.Nmodels, flux.shape[1])).copy()
-            linval_interp =  np.broadcast_to(linval_interp, (self.Nmodels, linval_interp.shape[1])).copy()
-
-        scatmp = scatmp[None, :] * np.abs(scalin)[:, None]
-        
-        pos_idx = scalin > 0
-        neg_idx = scalin < 0
-        if np.any(pos_idx):
-            ref_flux = flux[pos_idx, self.wav2num(wavnrm)][:, None]
-            ref_cont = conval_interp[self.wav2num(wavnrm)]
-            flux[pos_idx] += scatmp[pos_idx] * linval_interp[pos_idx] * ref_flux / ref_cont
-        if np.any(neg_idx):
-            flux[neg_idx] += scatmp[neg_idx] * linval_interp[neg_idx] * flux[neg_idx] / conval_interp[None, :]
-            
-        flux[flux < 0.0] = 0.0
-        self.flux = flux 
+        # EW scaling
+        else:
+            self.flux += _scatmp * linval * self.flux / conval
+            # Ensure that -ve portion of emission line spectrum hasn't
+            # resulted in spectrum with -ve fluxes
+            self.flux[self.flux < 0.0] = 0.0
 
     def host_galaxy(self, gwnmin=4000.0, gwnmax=5000.0):
         """Correctly normalise the host galaxy contribution."""
 
-        if self.wavlen.min() > gwnmin or self.wavlen.max() < gwnmax:
-            raise ValueError(f"wavlen must cover 4000-5000 A for galaxy normalisation")
-                   
+        if min(self.wavlen) > gwnmin or max(self.wavlen) < gwnmax:
+            raise Exception(
+                    'wavlen must cover 4000-5000 A for galaxy normalisation'
+                    + '\n Redshift is {}'.format(self.z))
 
-        fragal = self.params['fragal']
-        self.gplind = self.params['gplind']
-        fragal = np.minimum(self.params['fragal'], 0.99)
-        fragal = np.maximum(fragal, 0.0)
+        fragal = min(self.fragal, 0.99)
+        fragal = max(fragal, 0.0)
 
-        wavgal, flxtmp = self.frozen_params['galaxy_template']
-        flux = self.flux
+        if self.galaxy_template is not None:
+            wavgal, flxtmp = self.galaxy_template
+        else:
+            # galaxy SED input file
+            f3 = 'Sb_template_norm.sed'
+            wavgal, flxtmp = np.genfromtxt(f3, unpack=True)
+
         # Interpolate galaxy SED onto master wavlength array
         flxgal = np.interp(self.wavlen, wavgal, flxtmp)
-        idx_min, idx_max = self.wav2num(gwnmin), self.wav2num(gwnmax)
-        galcnt = np.sum(flxgal[idx_min:idx_max])
+        galcnt = np.sum(flxgal[self.wav2num(gwnmin):self.wav2num(gwnmax)])
 
         # Determine fraction of galaxy SED to add to unreddened quasar SED
-        qsocnt = np.sum(flux[:,idx_min:idx_max], axis = 1)
+        qsocnt = np.sum(self.flux[self.wav2num(gwnmin):self.wav2num(gwnmax)])
         # bring galaxy and quasar flux zero-points equal
         cscale = qsocnt / galcnt
 
         vallum = self.M_i
-        galnrm = -23.   # this is value of M_i for gznorm~0.35  galnrm = np.interp(0.2, self.zlum, self.lumval)
+        galnrm = -23.   # this is value of M_i for gznorm~0.35
+        # galnrm = np.interp(0.2, self.zlum, self.lumval)
+
         vallum = vallum - galnrm
         vallum = 10.0**(-0.4*vallum)
         tscale = vallum**(self.gplind-1)
         scagal = (fragal/(1-fragal))*tscale
-        self.host_galaxy_flux = cscale[:, None] * scagal[:,None] * flxgal[None,:]
-       
+
+        self.host_galaxy_flux = cscale * scagal * flxgal
 
     def redden_spectrum(self, R=3.1):
         """Redden quasar component of total SED. R=A_V/E(B-V)."""
 
-        wavtmp, flxtmp = self.frozen_params['reddening_curve']
+        if self.reddening_curve is not None:
+            wavtmp, flxtmp = self.reddening_curve
+        else:
+            # read extinction law from file
+            f4 = 'pl_ext_comp_03.sph'
+            wavtmp, flxtmp = np.genfromtxt(f4, unpack=True)
+
         extref = np.interp(self.wavlen, wavtmp, flxtmp)
-        exttmp = self.ebv[:, None] * (extref[None,:] + R)
-        self.flux = self.flux * (10.0**(-exttmp/2.5))
+        exttmp = self.ebv * (extref + R)
+        self.flux = self.flux*10.0**(-exttmp/2.5)
 
     def lyman_forest(self):
         """Suppress flux due to incomplete transmission through the IGM.
@@ -542,62 +532,34 @@ class Quasar_sed:
         tau_Lyg = 0.056*tau_Lya
         from ratio of oscillator strengths (e.g. Keating+ 2020MNRAS.497..906K).
         """
-
-        if np.any(tau_eff(self.z) > 0.):
-            wav = self.wavlen
-            z = self.z[:,None]
-            scale = np.ones_like(self.flux)
+        if tau_eff(self.z) > 0.:
 
             # Transmission shortward of Lyman-gamma
-            wlim = 972.
-            mask = wav < wlim
-            if np.any(mask):
-                zlook = ((1.0 + z) * wav[None, :]) / wlim - 1.0
-                scale[:, mask] = np.exp(-0.056*tau_eff(zlook[:,mask]))
+            scale = np.zeros_like(self.flux)
+            wlim = 972.0
+            zlook = ((1.0+self.z) * self.wavlen)/wlim - 1.0
+            scale[self.wavlen < wlim] = tau_eff(zlook[self.wavlen < wlim])
+            scale = np.exp(-0.056*scale)
+            self.flux = scale * self.flux
+            self.host_galaxy_flux = scale * self.host_galaxy_flux
 
             # Transmission shortward of Lyman-beta
+            scale = np.zeros_like(self.flux)
             wlim = 1026.0
-            mask = wav < wlim
-            if np.any(mask):
-                zlook = ((1.0 + z) * wav[None, :]) / wlim - 1.0
-                scale[:, mask] = np.exp(-0.16*tau_eff(zlook[:,mask]))
+            zlook = ((1.0+self.z) * self.wavlen)/wlim - 1.0
+            scale[self.wavlen < wlim] = tau_eff(zlook[self.wavlen < wlim])
+            scale = np.exp(-0.16*scale)
+            self.flux = scale * self.flux
+            self.host_galaxy_flux = scale * self.host_galaxy_flux
 
             # Transmission shortward of Lyman-alpha
-            wlim = 1216.
-            mask = wav < wlim
-            if np.any(mask):
-                zlook = ((1.0 + z) * wav[None, :]) / wlim - 1.0
-                scale[:, mask] = np.exp(tau_eff(zlook[:,mask]))
-
+            scale = np.zeros_like(self.flux)
+            wlim = 1216.0
+            zlook = ((1.0+self.z) * self.wavlen)/wlim - 1.0
+            scale[self.wavlen < wlim] = tau_eff(zlook[self.wavlen < wlim])
+            scale = np.exp(-scale)
             self.flux = scale * self.flux
-            if hasattr(self, "host_galaxy_flux"):
-                self.host_galaxy_flux = scale * self.host_galaxy_flux
-
-
-    
-    def _broadcast_params(self, param_dict):
-        """
-           Ensure all parameters have the same length.
-           Scalars are repeated to match the maximum length.
-        """
-        arrays = {k : np.atleast_1d(v) if v is not None else None
-                  for k, v in param_dict.items()}
-        lengths = [len(v) for v in arrays.values() if v is not None]
-        n = max(lengths) if lengths else 1
-        out = {}
-        for k, v in arrays.items():
-            if v is None:
-                out[k] = None
-            elif len(v) == 1 and n > 1:
-                out[k] = v
-            elif len(v) == n:
-                out[k] = v
-            else:
-                raise ValueError(
-                f"Parameter '{k}' has length {len(v)} but expected 1 or {n}")
-        self.Nmodels = n
-        return out
-
+            self.host_galaxy_flux = scale * self.host_galaxy_flux
 
 
 if __name__ == '__main__':
