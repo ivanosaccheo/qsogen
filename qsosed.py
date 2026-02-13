@@ -19,6 +19,9 @@ from scipy.interpolate import interp1d
 from astropy.convolution import Gaussian1DKernel, convolve
 from .config import params as default_params
 from .config import frozen_params as default_frozen
+import time
+
+
 
 _c_ = 299792458.0   # speed of light in m/s
 
@@ -553,21 +556,21 @@ class Quasar_sed:
             mask = wav < wlim
             if np.any(mask):
                 zlook = ((1.0 + z) * wav[None, :]) / wlim - 1.0
-                scale[:, mask] = np.exp(-0.056*tau_eff(zlook[:,mask]))
+                scale[:, mask] *= np.exp(-0.056*tau_eff(zlook[:,mask]))
 
             # Transmission shortward of Lyman-beta
             wlim = 1026.0
             mask = wav < wlim
             if np.any(mask):
                 zlook = ((1.0 + z) * wav[None, :]) / wlim - 1.0
-                scale[:, mask] = np.exp(-0.16*tau_eff(zlook[:,mask]))
+                scale[:, mask] *= np.exp(-0.16*tau_eff(zlook[:,mask]))
 
             # Transmission shortward of Lyman-alpha
             wlim = 1216.
             mask = wav < wlim
             if np.any(mask):
                 zlook = ((1.0 + z) * wav[None, :]) / wlim - 1.0
-                scale[:, mask] = np.exp(tau_eff(zlook[:,mask]))
+                scale[:, mask] *= np.exp(-tau_eff(zlook[:,mask]))
 
             self.flux = scale * self.flux
             if hasattr(self, "host_galaxy_flux"):
@@ -599,7 +602,127 @@ class Quasar_sed:
         return out
 
 
+def fast_quasar_sed_for_fitting(theta, obs_wavs, interps : dict):
+    #simplified vectorization for fitting. No galaxy/ebv
+    redshift = theta[:,0]
+    s1 =  -theta[:, 1][:,None] #-plslp1
+    s2 =  -theta[:, 2][:,None]
+    wb1 =  theta[:,3][:,None]
+    tbb = theta[:,4][:,None]
+    bbnorm = theta[:,5][:,None]
+    M_i = theta[:,6]
+
+    Nagn = len(redshift)
+    rest_wav = obs_wavs[None, :] / (1 + redshift)[:, None]
+     
+    ###Continuum
+    t0 = time.perf_counter()
+    log_rest_wav = np.log(rest_wav) 
+    log_wb1 = np.log(wb1)
+    log_wb3 = np.log(1200.0)
+    log_wnorm = np.log(5500.0)
+
+    c1_raw_log = (s2 - s1) * log_wb1
+    c3_raw_log = c1_raw_log + (s1 * log_wb3 - (s1 + 1.0) * log_wb3)
+    log_flux_5500 = np.where(5500.0 < wb1, c1_raw_log + s1 * log_wnorm, s2 * log_wnorm)
+
+    log_C1 = c1_raw_log - log_flux_5500
+    log_C2 = -log_flux_5500
+    log_C3 = c3_raw_log - log_flux_5500
+    m3 = rest_wav < 1200.0
+    m2 = rest_wav >= wb1
+    slopes = np.where(m3, s1 + 1.0, np.where(m2, s2, s1))
+    log_consts = np.where(m3, log_C3, np.where(m2, log_C2, log_C1))
+    f_nu = np.exp(log_consts + slopes * log_rest_wav)
+
+    t1 = time.perf_counter()
+    print(f"Pl took: {t1 - t0:.4f} seconds")
+   
+    ###Black body
+    t0 = time.perf_counter()
+    wnorm = 20000
+    bb_numerator = np.exp(-3.0 * log_rest_wav)
+    bb_denominator = np.exp(1.43877735e8 / (rest_wav * tbb)) - 1.0
+    bbval = (wnorm**(-3))/(np.exp(1.43877735e8 / (wnorm*tbb)) - 1.0)
+    black_body =  bbnorm / bbval * (bb_numerator/bb_denominator)
+    f_nu += black_body
+    f_lambda = f_nu * np.exp(-2.0 * log_rest_wav)
+    t1 = time.perf_counter()
+    print(f"BB took: {t1 - t0:.4f} seconds")
+    
+    ###Emission Lines 
+    t0 = time.perf_counter()
+    scalin = np.atleast_1d(-0.993)[:,None]
+    beslope = np.atleast_1d(0.183)[:,None]
+    benrm = np.atleast_1d(-27.0)[:,None]
+
+    varlin = (M_i[:,None] - benrm) * beslope
+    median_val = get_interpolated_template(rest_wav, interps['med'].x, interps['med'].y)
+    peaky_val = get_interpolated_template(rest_wav, interps['pky'].x, interps['med'].y)
+    wide_val = get_interpolated_template(rest_wav, interps['wdy'].x, interps['med'].y)
+    #narrow_val = interps['nlr'](rest_wav)
+    continuum_val = get_interpolated_template(rest_wav, interps['con'].x, interps['con'].y)
+    
+    
+    v_abs = np.abs(varlin)
+    v_p = np.minimum(varlin, 3.0)  
+    v_w = np.minimum(v_abs, 2.0)
+    pos_mask = varlin > 0
+    neg_mask = varlin < 0
+
+    linval = median_val.copy()
+
+    linval = np.where(pos_mask, v_p * peaky_val + (1 - v_p) * median_val, linval)
+    linval = np.where(neg_mask, v_w * wide_val + (1 - v_w) * median_val, linval)
+    
+    dip_mask = ((rest_wav > 4930) & (rest_wav < 5030)) | ((rest_wav > 1150) & (rest_wav < 1200))
+    idx = dip_mask & (linval < 0)
+    linval[idx] = 0.0
+
+    scatmp = np.ones_like(rest_wav)
+    #scahal = np.atleast_1d(1.0)[:, None] 
+    #scalya = np.atleast_1d(1.0)[:, None] 
+    #scatmp = np.where((rest_wav > 6000) & (rest_wav < 7000), scatmp * np.abs(scahal), scatmp)
+    #scatmp = np.where(rest_wav < 1350, scatmp * np.abs(scalya), scatmp)
+    scatmp = scatmp * np.abs(scalin)
+    f_5500 = np.exp(log_flux_5500) * (5500.0)**(-2)
+    continuum_normalization = f_5500 / interps["con"](5500) #continuum template normalized to my continuum
+    valid_template =  continuum_val > 0
+    f_line_ew = np.where(valid_template, scatmp * linval * (f_lambda / continuum_val), 0.0)
+    f_line_intensity = np.where(valid_template, scatmp * linval * continuum_normalization, 0.0)
+    f_line_total = np.where(scalin < 0, f_line_ew, f_line_intensity)
+    
+    f_lambda += f_line_total
+
+    t1 = time.perf_counter()
+    print(f"EL took: {t1 - t0:.4f} seconds")
+    
+    ###IGM absorption
+    t0 = time.perf_counter()
+    tau_total = np.ones_like(f_lambda)
+    tau_total[rest_wav<912.0] = 100.0
+    limits = [972.0, 1026.0, 1216.0]
+    coefficients = [0.056, 0.16, 1.0]
+    for wlim, coeff in zip(limits, coefficients):
+        mask = rest_wav < wlim
+        if np.any(mask):
+            zlook_1d = obs_wavs / wlim - 1.0
+            zlook_val = np.broadcast_to(zlook_1d, rest_wav.shape)[mask]
+            tau_total[mask] += coeff * tau_eff(zlook_val)
+    
+    scale = np.exp(-tau_total)
+    f_lambda *= scale
+    t1 = time.perf_counter()
+    print(f"IGM took: {t1 - t0:.4f} seconds")
+   
+    return f_lambda
+
+def get_interpolated_template(target_wav, template_x, template_y):
+    interpolated_template = np.interp(target_wav.ravel(), template_x, template_y, left = np.nan, right = np.nan).reshape(target_wav.shape)
+    return interpolated_template
+  
 
 if __name__ == '__main__':
 
     print(help(Quasar_sed))
+

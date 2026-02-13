@@ -41,7 +41,8 @@ And then run the SED model many times, using filter wav arrays as input wavlen:
 import numpy as np
 import os
 from scipy.integrate import simpson
-from .qsosed import Quasar_sed
+from scipy import sparse
+from .qsosed import Quasar_sed, fast_quasar_sed_for_fitting
 
 
 # assume 2007 Vega spectrum has zero magnitude in all bands
@@ -195,7 +196,7 @@ for band in ['GALEX_NUV',
 
 
 # default zeropoints use AB for SDSS and Vega for UKIDSS and WISE
-def get_colours(redshifts,
+def get_colours(redshifts, M_i = None,
                 filters=['SDSS_u_AB',
                          'SDSS_g_AB',
                          'SDSS_r_AB',
@@ -251,38 +252,25 @@ def get_colours(redshifts,
     # indices to invert the concatenation
 
     model_colours = []
-
-    try:
-        for z in redshifts:
-            rest_ordered_wav = np.sort(obs_wavlen/(1+z))
-            # now in rest frame of qso
-            ordered_flux = Quasar_sed(wavlen=rest_ordered_wav,
-                                      z=z,
-                                      **kwargs).flux
-            # qsosed will produce redshifted flux
-
-            # Create individual arrays with the flux in each observed passband
-            fluxes = np.split(ordered_flux[isort], split_indices)
-
-            model_colours.append(-np.diff(sed2mags(filters,
-                                                   waves,
-                                                   fluxes,
-                                                   responses)))
-    except TypeError:
-        z = float(redshifts)
+    if M_i is None:
+        M_i = [None for i in redshifts]
+    elif np.isscalar(M_i):
+        M_i = np.repeat(np.atleast_1d(M_i), len(redshifts))
+    for z, mi in zip(np.atleast_1d(redshifts), np.atleast_1d(M_i), strict = True):
         rest_ordered_wav = np.sort(obs_wavlen/(1+z))
         # now in rest frame of qso
-        ordered_flux = Quasar_sed(wavlen=rest_ordered_wav, z=z, **kwargs).flux
+        ordered_flux = Quasar_sed(wavlen=rest_ordered_wav,
+                                      z=z, M_i = mi,
+                                      **kwargs).flux
         # qsosed will produce redshifted flux
 
         # Create individual arrays with the flux in each observed passband
         fluxes = np.split(ordered_flux[isort], split_indices)
 
         model_colours.append(-np.diff(sed2mags(filters,
-                                               waves,
-                                               fluxes,
-                                               responses)))
-
+                                                waves,
+                                                fluxes,
+                                                responses)))
     return(np.array(model_colours))
 
 
@@ -342,7 +330,7 @@ def get_mags(redshifts,
     # indices to invert the concatenation
 
     model_mags = []
-
+    
     try:
         for z in redshifts:
             rest_ordered_wav = np.sort(obs_wavlen/(1+z))
@@ -462,7 +450,7 @@ def produce_zeropoints(system='Vega',
     print(')')
 
 
-def get_filters_properties(filters = ['SDSS_u_AB',
+def get_filters_properties(filters =['SDSS_u_AB',
                                     'SDSS_g_AB',
                                     'SDSS_r_AB',
                                     'SDSS_i_AB',
@@ -472,53 +460,125 @@ def get_filters_properties(filters = ['SDSS_u_AB',
                                     'UKIDSS_H_Vega',
                                     'UKIDSS_K_Vega',
                                     'WISE_W1_Vega',
-                                    'WISE_W2_Vega']):
+                                    'WISE_W2_Vega'],
+                                     resample = False, max_points = 75):
+    waves_raw, weights_raw, filter_ids = [], [], []
+    zps = []
+    for i, band in enumerate(filters):
+        zp = zeropoints[band]
+        clean_band = band.replace('_AB', '').replace('_Vega', '')
+        w = wavarrs[clean_band]
+        r = resparrs[clean_band]
+        if resample and len(w) > max_points:
+            w_new = np.linspace(w.min(), w.max(), max_points)
+            r = np.interp(w_new, w, r)
+            w = w_new
+        dx = np.zeros_like(w)
+        dx[0] = (w[1] - w[0]) / 2
+        dx[-1] = (w[-1] - w[-2]) / 2
+        dx[1:-1] = (w[2:] - w[:-2]) / 2
+        combined_weight = (r * w * dx) / zp
+        waves_raw.append(w)
+        weights_raw.append(combined_weight)
+        filter_ids.append(np.full(len(w), i))
+
+    obs_wavlen_flat = np.concatenate(waves_raw)
+    weights_flat = np.concatenate(weights_raw)
+    ids_flat = np.concatenate(filter_ids)
+        
+    order = np.argsort(obs_wavlen_flat)
+    obs_wav_sorted = obs_wavlen_flat[order]
+    weights_sorted = weights_flat[order]
+    ids_sorted = ids_flat[order]
+    n_filters = len(filters)
+    total_pts = len(obs_wav_sorted)
+    sparse_W = sparse.csr_matrix(
+        (weights_sorted, (ids_sorted, np.arange(total_pts))),
+        shape=(n_filters, total_pts))
+        
+    return obs_wav_sorted, sparse_W.T
+
+
+def get_filters_properties_old(filters =['SDSS_u_AB',
+                                    'SDSS_g_AB',
+                                    'SDSS_r_AB',
+                                    'SDSS_i_AB',
+                                    'SDSS_z_AB',
+                                    'UKIDSS_Y_Vega',
+                                    'UKIDSS_J_Vega',
+                                    'UKIDSS_H_Vega',
+                                    'UKIDSS_K_Vega',
+                                    'WISE_W1_Vega',
+                                    'WISE_W2_Vega'],
+                                    resample = False, max_points = 75):
     waves, responses, zero_points = [], [], []
     for band in filters:
         zero_points.append(zeropoints[band])
         band = band.replace('_AB', '').replace('_Vega', '')
         waves.append(wavarrs[band])
         responses.append(resparrs[band])
-        
+    
+    if resample:
+        new_waves = []
+        new_responses = []
+        for w, r in zip(waves, responses):
+            if len(w) > max_points:
+                w_new = np.linspace(w.min(), w.max(), max_points)
+                r_new = np.interp(w_new, w, r) 
+                new_waves.append(w_new)
+                new_responses.append(r_new)
+            else:
+                new_waves.append(w)
+                new_responses.append(r)
+        waves = new_waves
+        responses = new_responses
+    
+    integration_weights = []
+    for w, r in zip(waves, responses):
+        dx = np.zeros_like(w)
+        dx[0] = (w[1] - w[0]) / 2
+        dx[-1] = (w[-1] - w[-2]) / 2
+        dx[1:-1] = (w[2:] - w[:-2]) / 2
+        integration_weights.append(r * w * dx)
 
     obs_wavlen = np.concatenate(waves)
     order = np.argsort(obs_wavlen)
     isort = order.argsort()
     split_indices = np.cumsum([len(wav) for wav in waves[:-1]])
 
-    return waves, responses, zero_points, obs_wavlen, order, isort, split_indices
+    return waves, responses, zero_points, obs_wavlen, order, isort, split_indices, integration_weights
 
 
 
-def get_colours_fast(redshifts, M_i, filters_properties, **kwargs):
-    waves, responses, zero_points, obs_wavlen, order, isort, split_indices = filters_properties
-    model_colours = []
-
-    for z, mi in zip(np.atleast_1d(redshifts), np.atleast_1d(M_i), strict=True):
-        rest_ordered_wav = obs_wavlen[order] / (1 + z)
-        ordered_flux = Quasar_sed(wavlen=rest_ordered_wav, z=z, M_i = mi, **kwargs).flux
-        if ordered_flux.ndim == 1:
-            ordered_flux = ordered_flux[None,:]
-        flux_original = ordered_flux[:, isort]
-        fluxes = np.split(flux_original, split_indices, axis = 1)
-        colors = -np.diff(sed2mags_fast(waves, fluxes, responses, zero_points), axis =1)
-        model_colours.append(colors if colors.ndim ==2 else colors[None, :])
-    return(np.array(model_colours))   
-
+def get_colours_fast(theta, interps, filters_properties):
+    """theta =(N,7), [redshift, plslp1, plslp2, wavbrk1, tbb, bbnorm, M_i])"""
+    obs_wav_sorted, sparse_W_T = filters_properties
+    ordered_flux = fast_quasar_sed_for_fitting(theta, obs_wav_sorted, interps)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mag_flux = ordered_flux @ sparse_W_T 
+        mags = -2.5 * np.log10(mag_flux)
+    return -np.diff(mags, axis=1)
 
 def sed2mags_fast(waves, fluxes, responses, zero_points):
-        
-        if fluxes[0].ndim == 1:
-            fluxes = [f[None, :] for f in fluxes]
-        Nmodels = fluxes[0].shape[0]
-        mags = np.full((Nmodels, len(waves)), np.nan)
-
-        for i in range(len(waves)):
-            flux = simpson(waves[i]*responses[i]*fluxes[i], waves[i], axis = 1)
+    Nmodels = fluxes[0].shape[0]
+    Nfilters = len(waves)
+    mags = np.full((Nmodels, Nfilters), np.nan)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        for i in range(Nfilters):
+            integrand = waves[i]*responses[i]*fluxes[i]
+            flux = simpson(integrand, waves[i], axis=1)
             mags[:,i] = -2.5*np.log10(flux/zero_points[i])
+    return mags
 
-        return(mags)
-
+def sed2mags_with_weights(fluxes, weights, zero_points):
+    Nmodels = fluxes[0].shape[0]
+    Nfilters = len(weights)
+    mags = np.full((Nmodels, Nfilters), np.nan)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        for i in range(Nfilters):
+            f_int = np.dot(fluxes[i], weights[i])
+            mags[:, i] = -2.5 * np.log10(f_int / zero_points[i])
+    return mags
 
 
 if __name__ == '__main__':
