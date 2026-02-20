@@ -616,7 +616,6 @@ def fast_quasar_sed_for_fitting(theta, obs_wavs, interps : dict):
     rest_wav = obs_wavs[None, :] / (1 + redshift)[:, None]
      
     ###Continuum
-    t0 = time.perf_counter()
     log_rest_wav = np.log(rest_wav) 
     log_wb1 = np.log(wb1)
     log_wb3 = np.log(1200.0)
@@ -635,11 +634,9 @@ def fast_quasar_sed_for_fitting(theta, obs_wavs, interps : dict):
     log_consts = np.where(m3, log_C3, np.where(m2, log_C2, log_C1))
     f_nu = np.exp(log_consts + slopes * log_rest_wav)
 
-    t1 = time.perf_counter()
-    print(f"Pl took: {t1 - t0:.4f} seconds")
+
    
     ###Black body
-    t0 = time.perf_counter()
     wnorm = 20000
     bb_numerator = np.exp(-3.0 * log_rest_wav)
     bb_denominator = np.exp(1.43877735e8 / (rest_wav * tbb)) - 1.0
@@ -647,19 +644,18 @@ def fast_quasar_sed_for_fitting(theta, obs_wavs, interps : dict):
     black_body =  bbnorm / bbval * (bb_numerator/bb_denominator)
     f_nu += black_body
     f_lambda = f_nu * np.exp(-2.0 * log_rest_wav)
-    t1 = time.perf_counter()
-    print(f"BB took: {t1 - t0:.4f} seconds")
+
     
     ###Emission Lines 
-    t0 = time.perf_counter()
+
     scalin = np.atleast_1d(-0.993)[:,None]
     beslope = np.atleast_1d(0.183)[:,None]
     benrm = np.atleast_1d(-27.0)[:,None]
 
     varlin = (M_i[:,None] - benrm) * beslope
     median_val = get_interpolated_template(rest_wav, interps['med'].x, interps['med'].y)
-    peaky_val = get_interpolated_template(rest_wav, interps['pky'].x, interps['med'].y)
-    wide_val = get_interpolated_template(rest_wav, interps['wdy'].x, interps['med'].y)
+    peaky_val = get_interpolated_template(rest_wav, interps['pky'].x, interps['pky'].y)
+    wide_val = get_interpolated_template(rest_wav, interps['wdy'].x, interps['wdy'].y)
     #narrow_val = interps['nlr'](rest_wav)
     continuum_val = get_interpolated_template(rest_wav, interps['con'].x, interps['con'].y)
     
@@ -694,12 +690,9 @@ def fast_quasar_sed_for_fitting(theta, obs_wavs, interps : dict):
     
     f_lambda += f_line_total
 
-    t1 = time.perf_counter()
-    print(f"EL took: {t1 - t0:.4f} seconds")
     
     ###IGM absorption
-    t0 = time.perf_counter()
-    tau_total = np.ones_like(f_lambda)
+    tau_total = np.zeros_like(f_lambda)
     tau_total[rest_wav<912.0] = 100.0
     limits = [972.0, 1026.0, 1216.0]
     coefficients = [0.056, 0.16, 1.0]
@@ -712,9 +705,6 @@ def fast_quasar_sed_for_fitting(theta, obs_wavs, interps : dict):
     
     scale = np.exp(-tau_total)
     f_lambda *= scale
-    t1 = time.perf_counter()
-    print(f"IGM took: {t1 - t0:.4f} seconds")
-   
     return f_lambda
 
 def get_interpolated_template(target_wav, template_x, template_y):

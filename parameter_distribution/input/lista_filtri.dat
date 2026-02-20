@@ -1,0 +1,19 @@
+#Comment to skip, necessary = keep only QSOs with data in that band, to_fit = if that band should be use to compute colors
+
+myname         temple_name        necessary       to_fit    
+#GALEX.FUV      GALEX_NUV_AB         False           False
+#GALEX.NUV      GALEX_FUV_AB         False          True
+SDSS.u         SDSS_u_AB            True            True
+SDSS.g         SDSS_g_AB            True            True
+SDSS.r         SDSS_r_AB            True            True
+SDSS.i         SDSS_i_AB            True            True
+SDSS.z         SDSS_z_AB            True            True
+UKIDSS.Y       UKIDSS_Y_Vega          True          True
+UKIDSS.J       UKIDSS_J_Vega          True          True
+UKIDSS.H       UKIDSS_H_Vega          True          True
+UKIDSS.K       UKIDSS_K_Vega          True          True
+WISE.W1             WISE_W1_Vega           True          True
+WISE.W2             WISE_W2_Vega           True          True
+#W3            WISE_W3_AB           False           False
+#W4            WISE_W4_AB           False          False
+                          
