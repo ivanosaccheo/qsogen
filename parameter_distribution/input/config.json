@@ -34,15 +34,15 @@
         "N_bins": null
     },
     "sampling": {
-        "Nsteps": 50000,
+        "Nsteps": 2000,
         "Nbins_hist": 100,
         "plslp1_hist": [
             -1,
-            0.5
+            0.2
         ],
         "plslp2_hist": [
             -0.5,
-            0.5
+            0.7
         ],
         "wavbrk_hist": [
             1500,
@@ -58,7 +58,8 @@
         ],
         "wavbrk_hist_log": true,
         "plslp1_scale": 0.05,
-        "plslp2_scale": 80,
+        "plslp2_scale": 0.05,
+        "wavbrk_scale": 80,
         "tbb_scale": 50,
         "bbnorm_scale": 0.15,
         "adapt_every": 50,
@@ -66,7 +67,7 @@
         "adapt_factor": 1.3,
         "seed": 1900,
         "verbose": true,
-        "save_every": 1
+        "save_every": 10
     },
     "saving": {
         "filename": "sample_fitting",

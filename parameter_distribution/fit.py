@@ -1,5 +1,5 @@
 import sys 
-sys.path.append('../')
+sys.path.append('../..')
 import os
 import json 
 import numpy as np 
@@ -7,8 +7,8 @@ import time
 import datetime
 import fitting_library as fl
 import prepare_sample
-import fast_sed
-import model_colours
+from qsogen import fast_sed
+from qsogen import model_colours
 from gibbs_sampler import run_gibbs_sampler, ProposalConfig
 
 with open("input/config.json") as f:
