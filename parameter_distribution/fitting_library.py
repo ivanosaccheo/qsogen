@@ -2,6 +2,8 @@ import sys
 sys.path.append("../../")
 import numpy as np 
 from qsogen.fast_sed import get_colours_fast
+from numba import njit
+
 
 def log_likelihood(theta, y, yerr, grid, filters_properties,
                     wavbrk3 = 1200,
@@ -18,10 +20,24 @@ def log_likelihood(theta, y, yerr, grid, filters_properties,
                             beslope = beslope,
                             benrm = benrm,
                             cont_norm_wav = cont_norm_wav)
-    sigma2 = yerr**2 
-    S = (y - model) ** 2 / sigma2 + np.log(2*np.pi*sigma2)
-    S = np.ma.masked_invalid(S)
-    return -0.5 * np.sum(S, axis = 1)
+    
+    Nagn, Ncol = y.shape
+    loglike = np.zeros(Nagn)
+    for i in range(Nagn):
+        total = 0.0
+        for j in range(Ncol):
+
+            if np.isfinite(y[i, j]):   # yerr 
+                sigma2 = yerr[i, j] * yerr[i, j]
+                diff = y[i, j] - model[i, j]
+                total += diff * diff / sigma2 + np.log(2.0 * np.pi * sigma2)
+
+        loglike[i] = -0.5 * total
+
+    return loglike
+
+
+
 
 
 def sample_from_hist(nsamples, hist_edges, hist_weights):

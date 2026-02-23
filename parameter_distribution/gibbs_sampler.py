@@ -36,7 +36,8 @@ def _propose_additive(x: np.ndarray, scale: float, rng: np.random.Generator) -> 
 
 
 def _propose_log_normal(x: np.ndarray, scale: float, rng: np.random.Generator) -> np.ndarray:
-    return x * np.exp(rng.normal(0, scale, size=x.shape))
+    sampled =  x * np.exp(rng.normal(0, scale, size=x.shape))
+    return np.clip(sampled, 1e-10)
 
 
 _STRATEGY_MAP = {
@@ -63,13 +64,12 @@ class ProposalConfig:
 # ── default configs for the 5 QSO SED parameters ────────────────────
 
 DEFAULT_PROPOSAL_CONFIGS: List[ProposalConfig] = [
-    ProposalConfig(strategy="fractional", scale=0.05),   # plslp1  (negative, scales with value)
-    ProposalConfig(strategy="additive",   scale=0.01),   # plslp2  (near zero, small range)
-    ProposalConfig(strategy="additive",   scale=50.0),   # wavbreak (bounded, ~2000-4000)
-    ProposalConfig(strategy="log_normal", scale=0.05),   # tbb     (strictly positive)
-    ProposalConfig(strategy="log_normal", scale=0.05),   # bbnorm  (strictly positive)
+    ProposalConfig(strategy="additive", scale=0.05),   # plslp1  
+    ProposalConfig(strategy="additive", scale=0.05),   # plslp2 
+    ProposalConfig(strategy="additive", scale=50.0),   # wavbreak 
+    ProposalConfig(strategy="additive", scale=50),     # tbb    
+    ProposalConfig(strategy="additive", scale=0.15),   # bbnorm  
 ]
-
 
 def propose_parameters(
     params: np.ndarray,
@@ -119,7 +119,7 @@ def run_gibbs_sampler(
     adapt_every: int = 50,
     target_acceptance: float = 0.35,
     adapt_factor: float = 1.3,
-    seed: int = 42,
+    seed: int = 1900,
     verbose: bool = True,
     save_every: int = 1,
 ) -> GibbsSamplerResult:

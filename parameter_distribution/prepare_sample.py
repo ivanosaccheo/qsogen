@@ -375,14 +375,22 @@ class color_container_class:
         Mi = self.M_i[self.clip_mask] if clipped else self.M_i
         return redshift, colors, colors_errors, Mi
 
-    def process_pipeline(self):
+    def process_pipeline(self, 
+                        clipping_sigma = 3, 
+                        statistic = "median",
+                        user_bins = None, 
+                        N_objects = [30, 90, 400, 100, 25],
+                        redshift_cuts = [0.8, 1.2, 2.8, 3.0],
+                        N_bins = None,
+                        ):
         self.read_filters_names()
         self.select_magnitudes()
         self.get_filters()
         self.get_luminosity(magnitudes_are_vega=True)
         self.get_M_i()
         self.get_colors()
-        self.get_bins(N_objects=  [30, 90, 400, 100, 25],redshift_cuts = [0.8, 1.2, 2.8, 3.0])
-        self.get_clipped_colors(clipping_sigma=3)
+        self.get_bins(N_objects= N_objects,redshift_cuts = redshift_cuts, user_bins = user_bins,
+                      N_bins = N_bins)
+        self.get_clipped_colors(clipping_sigma=clipping_sigma, cenfunc = statistic)
         self.clean_colors_for_redshift()
 
