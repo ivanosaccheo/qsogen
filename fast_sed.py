@@ -336,7 +336,8 @@ def _sed_kernel(
 # Public API
 # ---------------------------------------------------------------------------
 
-def fast_quasar_sed(theta, obs_wavs, grid,
+def fast_quasar_sed(theta, obs_wavs, 
+                    emlines_grid,
                     wavbrk3 = 1200,
                     plslp3_step = -1,
                     scalin = -0.993,
@@ -374,7 +375,7 @@ def fast_quasar_sed(theta, obs_wavs, grid,
     bbn = theta[:, 5]
     mi = theta[:, 6]
 
-    inv_dlog = 1.0 / grid['dlog']
+    inv_dlog = 1.0 / emlines_grid['dlog']
 
     constants = (wavbrk3,
                 plslp3_step,
@@ -387,16 +388,16 @@ def fast_quasar_sed(theta, obs_wavs, grid,
     _sed_kernel(
         redshift, s1_neg, s2_neg, wb1, tbb, bbn, mi,
         obs_wavs,
-        grid['log_wav_min'], inv_dlog, grid['n_grid'],
-        grid['med'], grid['pky'], grid['wdy'], grid['con'],
-        grid['con_at_5500'],
+        emlines_grid['log_wav_min'], inv_dlog, emlines_grid['n_grid'],
+        emlines_grid['med'], emlines_grid['pky'], emlines_grid['wdy'], emlines_grid['con'],
+        emlines_grid['con_at_5500'],
         out, constants,
     )
 
     return out
 
 
-def get_colours_fast(theta, grid, filters_properties,
+def get_colours_fast(theta, emlines_grid, filters_properties,
                     wavbrk3 = 1200,
                     plslp3_step = -1,
                     scalin = -0.9936,
@@ -419,7 +420,7 @@ def get_colours_fast(theta, grid, filters_properties,
     colours : ndarray, shape (N, n_filters - 1)
     """
     obs_wav_sorted, sparse_W_T = filters_properties
-    ordered_flux = fast_quasar_sed(theta, obs_wav_sorted, grid,
+    ordered_flux = fast_quasar_sed(theta, obs_wav_sorted, emlines_grid,
                                 wavbrk3 =  wavbrk3,
                                 plslp3_step = plslp3_step,
                                 scalin = scalin,

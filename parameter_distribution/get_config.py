@@ -23,8 +23,27 @@ binning_default_dict = {
 "N_bins" : None
 }
 
-sampling_default_dict = {
+
+gibbs_sampler_default_dict = {
+"population_prior" : "normal",
 "Nsteps" : 50000,
+"adapt_every":  50,
+"target_acceptance":  0.35,
+"adapt_factor": 1.2,
+"seed": 1900,
+"verbose": True,
+"save_every" : 10,
+"checkpoint_every" : 500,
+"plslp1_scale" : 0.05,
+"plslp2_scale" : 0.05,
+"wavbrk_scale" : 80, 
+"tbb_scale" : 50,
+"bbnorm_scale" : 0.15
+}
+
+normal_population_default_dict = {}
+
+histogram_population_default_dict = {
 "Nbins_hist" : 100,
 "plslp1_hist" : [-1, 0.5],
 "plslp2_hist" : [-0.5, 0.5],
@@ -32,31 +51,21 @@ sampling_default_dict = {
 "tbb_hist" : [500, 2500],
 "bbnorm_hist" : [0, 9],
 "wavbrk_hist_log" : True,
-"plslp1_scale" : 0.05,
-"plslp2_scale" : 0.05,
-"wavbrk_scale" : 80, 
-"tbb_scale" : 50,
-"bbnorm_scale" : 0.15,
-"adapt_every":  50,
-"target_acceptance":  0.35,
-"adapt_factor": 1.3,
-"seed": 1900,
-"verbose": True,
-"save_every" : 1,
 }
 
 saving_default_dict = {
     "filename" : "sample_fitting",
     "directory" : "~/WORK/",
-    "add_date" : True,
-}
+    "add_date" : True
+    }
 
 
 
 if __name__ == "__main__":
     config = {"sample" : sample_default_dict,
               "binning" : binning_default_dict,
-              "sampling" : sampling_default_dict,
+              "gibbs_sampler" : {**gibbs_sampler_default_dict, **normal_population_default_dict,
+                                 **histogram_population_default_dict},
               "saving" : saving_default_dict}
     with open("input/config.json", "w") as f:
         json.dump(config, f, indent = 4)
