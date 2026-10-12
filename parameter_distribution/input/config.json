@@ -12,7 +12,7 @@
             0,
             10
         ],
-        "SDSS_QSOs_path": "~/DATA/samples/SDSS"
+        "SDSS_QSOs_path": "~/DATA"
     },
     "binning": {
         "clipping_sigma": 3,
@@ -34,23 +34,23 @@
         "N_bins": null
     },
     "gibbs_sampler": {
-        "population_prior": "normal",
-        "Nsteps": 100,
+        "population_prior": "histogram",
+        "Nsteps": 100000,
         "adapt_every": 50,
         "target_acceptance": 0.35,
-        "adapt_factor": 1.2,
+        "adapt_factor": 1.1,
         "seed": 1900,
         "verbose": true,
         "save_every": 10,
         "checkpoint_every": 500,
-        "Nbins_hist": 100,
+        "Nbins_hist": 250,
         "plslp1_hist": [
-            -1,
-            0.5
+            -1.5,
+            1.5
         ],
         "plslp2_hist": [
-            -0.5,
-            0.5
+            -1.5,
+            1.5
         ],
         "wavbrk_hist": [
             1500,
@@ -72,8 +72,8 @@
         "bbnorm_scale": 0.15
     },
     "saving": {
-        "filename": "sample_fitting",
-        "directory": "~/WORK/qsogen_master/output",
+        "filename": "histogram_population",
+        "directory": "~/DATA/MC_CHAINS",
         "add_date": true
     }
 }

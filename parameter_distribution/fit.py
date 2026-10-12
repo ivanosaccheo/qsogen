@@ -91,7 +91,7 @@ if options["population_prior"].lower() == "histogram":
                                     seed=options["seed"],
                                     verbose=options["verbose"],
                                     save_every=options["save_every"],
-                                    checkpoint_file = checkpoint_filename,
+                                    checkpoint_file = filename_checkpoint,
                                     checkpoint_every =  options["checkpoint_every"])
     
 elif options["population_prior"].lower() == "normal":

@@ -15,7 +15,7 @@ Edit 2022 May: update reference to published paper 2021MNRAS.508..737T
 import numpy as np
 import os
 
-maindir = os.path.expanduser("~/WORK/qsogen_master/qsogen")
+maindir = os.path.expanduser("~/qsogen")
 
 f1 = os.path.join(maindir,'qsosed_emlines_20210625.dat')
 emline_template = np.genfromtxt(f1, unpack=True)

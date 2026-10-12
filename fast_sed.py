@@ -31,7 +31,7 @@ from numba import njit, prange
 
 def make_interps():
     """Build the interps dict the same way the original code expects."""
-    maindir = os.path.expanduser("~/WORK/qsogen_master/qsogen")
+    maindir = os.path.expanduser("~/qsogen")
     f1 = os.path.join(maindir,'qsosed_emlines_20210625.dat')
     emline= np.genfromtxt(f1, unpack=True)
     wavs = emline[0]
@@ -411,7 +411,7 @@ def get_colours_fast(theta, emlines_grid, filters_properties,
     ----------
     theta : ndarray, shape (N, 7)
         [redshift, plslp1, plslp2, wavbrk1, tbb, bbnorm, M_i]
-    grid : dict
+    emlines_grid : dict
         Output of build_template_grid().
     filters_properties : tuple
         (obs_wav_sorted, sparse_W_T) from get_filters_properties()

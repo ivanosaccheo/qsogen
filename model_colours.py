@@ -190,7 +190,7 @@ for band in ['GALEX_NUV',
     try:
         wavarr, response = np.genfromtxt(band+'.filter', unpack=True)
     except OSError:
-        wavarr, response = np.genfromtxt(os.path.expanduser("~/WORK/qsogen_master/qsogen/filters/")+band+'.filter', unpack=True)
+        wavarr, response = np.genfromtxt(os.path.expanduser("~/qsogen/filters/")+band+'.filter', unpack=True)
     wavarrs[band] = wavarr
     resparrs[band] = response
 
