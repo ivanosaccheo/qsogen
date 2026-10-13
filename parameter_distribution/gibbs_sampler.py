@@ -18,6 +18,7 @@ Each entry in `proposal_config` is a dict:
 
 from __future__ import annotations
 import numpy as np
+
 import h5py
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
@@ -321,12 +322,12 @@ class GibbsSamplerBase(ABC):
         ...
 
     @abstractmethod
-    def _log_prior(self, physical_parameters_current: np.ndarray) -> np.ndarray:
+    def _log_prior(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> np.ndarray:
         """Return (Nagn,) log-prior given the current population state."""
         ...
 
     @abstractmethod
-    def _update_population(self, physical_parameters_current: np.ndarray) -> None:
+    def _update_population(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> None:
         """Gibbs step: update population hyperparameters in-place on self."""
         ...
 
@@ -401,11 +402,11 @@ class GibbsSamplerBase(ABC):
                    ds[old_len:] = new_data
             # Always update current state
                 f["parameters_current"][...] = (parameters_current)
-                f["proposal_scales"][...] = self.proposal_scale
+                f["proposal_scale"][...] = self.proposal_scale
                 pop = self._get_population_state()
                 for key, arr in pop.items():
                     f[f"population/{key}"][...] = arr
-            self._last_flushed_idx = new_end
+        self._last_flushed_idx = new_end
         
         if self.verbose:
             if has_new_trace:
@@ -496,8 +497,8 @@ class GibbsSamplerBase(ABC):
     def run(self) -> GibbsSamplerResult:
         # ── initialise ───────────────────────────────────────────────
         self._init_population()
-        parameters_current = self._sample_initial_parameters()
-        physical_parameters_current = self._to_physical_parameters(parameters_current)
+        internal_parameters_current = self._sample_initial_parameters()
+        physical_parameters_current = self._to_physical_parameters(internal_parameters_current)
         
         if self.save_parameter_chain:
             self._initialize_parameter_chain_file()
@@ -525,14 +526,14 @@ class GibbsSamplerBase(ABC):
         #MC chain
         for step in range(1, self.n_steps + 1):
             # ── propose new parameters ───────────────────────────────
-            parameters_new = propose_parameters_simple(parameters_current, self.proposal_scale, self.rng)
-            physical_parameters_new = self._to_physical_parameters(parameters_new)
+            internal_parameters_new = propose_parameters_simple(internal_parameters_current, self.proposal_scale, self.rng)
+            physical_parameters_new = self._to_physical_parameters(internal_parameters_new)
             # ── evaluate posterior ───────────────────────────────────
             theta_cur[:, 1:-1] = physical_parameters_new
             ll_new = fl.log_likelihood(theta_cur, self.y, self.y_precision, 
                                     self.y_log_norm, self.y_valid_mask,
                                     self.emlines_grid, self.filter_properties)
-            lp_new = self._log_prior(physical_parameters_new)
+            lp_new = self._log_prior(physical_parameters_new, internal_parameters_new)
             logpost_new = ll_new + lp_new
 
             # ── Metropolis accept/reject ─────────────────────────────
@@ -540,12 +541,12 @@ class GibbsSamplerBase(ABC):
             u = np.log(self.rng.random(self.Nagn))
             accept_mask = u < log_alpha
 
-            parameters_current[accept_mask] = parameters_new[accept_mask]
+            internal_parameters_current[accept_mask] = internal_parameters_new[accept_mask]
             physical_parameters_current[accept_mask] = physical_parameters_new[accept_mask]
             ll_current[accept_mask] = ll_new[accept_mask]
 
             # ── Gibbs step: update population ────────────────────────
-            self._update_population(physical_parameters_current)
+            self._update_population(physical_parameters_current, internal_parameters_current)
             lp_current = self._log_prior(physical_parameters_current)
             logpost_current = ll_current + lp_current
 
@@ -622,15 +623,15 @@ class HistogramGibbsSampler(GibbsSamplerBase):
                                    self._hist_weights, rng = self.rng)
         return self._to_internal_parameters(physical_parameters)
 
-    def _log_prior(self, physical_parameters: np.ndarray) -> np.ndarray:
+    def _log_prior(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> np.ndarray:
         log_densities = np.log((self._hist_weights / self._widths) + 1e-5)
         return fl.log_prior_from_hist(physical_parameters, 
                                       self.hist_edges, 
                                       self._hist_weights,
                                       log_densities=log_densities,)
 
-    def _update_population(self, physical_parameters_current: np.ndarray) -> None:
-        self._hist_weights = fl.update_histogram_weights(physical_parameters_current, 
+    def _update_population(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> None:
+        self._hist_weights = fl.update_histogram_weights(physical_parameters, 
                                                         self.hist_edges, 
                                                         rng = self.rng)
 
@@ -662,13 +663,13 @@ class NormalGibbsSampler(GibbsSamplerBase):
         physical_parameters = fl.sample_from_normal(self._mu_population, self._var_population, self.Nagn, rng = self.rng)
         return self._to_internal_parameters(physical_parameters)
 
-    def _log_prior(self, physical_parameters: np.ndarray) -> np.ndarray:
+    def _log_prior(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> np.ndarray:
         return fl.log_prior_from_normal(physical_parameters, self._mu_population, self._var_population)
 
-    def _update_population(self, physical_parameters_current: np.ndarray) -> None:
-        sample_mean = np.mean(physical_parameters_current, axis=0)
+    def _update_population(self, physical_parameters: np.ndarray, internal_parameters : np.ndarray) -> None:
+        sample_mean = np.mean(physical_parameters, axis=0)
         self._mu_population = self.rng.normal(sample_mean, np.sqrt(self._var_population / self.Nagn))
-        residuals = physical_parameters_current - self._mu_population
+        residuals = physical_parameters - self._mu_population
         sq_residuals = np.sum(residuals**2, axis=0)
         sq_residuals = np.maximum(sq_residuals, 1e-12) #Avoid numeric inifinites
         self._var_population = 1.0 / self.rng.gamma(shape=self.Nagn / 2.0,
@@ -686,6 +687,78 @@ class NormalGibbsSampler(GibbsSamplerBase):
             "mu": self._mu_population.copy(),
             "variance": self._var_population.copy(),
         }
+
+
+class MultiNormalGibbsSampler(GibbsSamplerBase):
+    """Gibbs sampler with normal/inverse-gamma population prior."""
+
+    def __init__(self, *, n_parameters: int = 5, 
+                kappa0=1e-3,
+                nu0=None,
+                **kwargs):
+        self._n_parameters = n_parameters
+        
+        self.kappa0 = kappa0
+        if nu0 is None:
+            nu0 = n_parameters + 2
+        self.nu0 = nu0
+        # Weak prior in standardized coordinates
+        self.mu0 = np.zeros(n_parameters)
+        self.psi0 = np.eye(n_parameters)
+
+        self._mu_population = None
+        self._cov_population = None
+
+        super().__init__(**kwargs)
+
+    def _get_n_parameters(self) -> int:
+        return self._n_parameters
+
+    def _init_population(self) -> None:
+        self._mu_population = np.zeros(self.N_parameters)
+        self._cov_population = np.eye(self.N_parameters)
+        
+    def _sample_initial_parameters(self) -> np.ndarray:
+        internal_parameters = fl.sample_from_multivariate_normal(self._mu_population, self._cov_population,
+                                                                self.Nagn, rng = self.rng)
+        return internal_parameters
+
+    def _log_prior(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> np.ndarray:
+        log_prior =  fl.log_prior_from_multivariate_normal(internal_parameters, self._mu_population, self._cov_population)
+        invalid = np.any(physical_parameters[:, -3:]<0, axis =1) 
+        log_prior[invalid] = -np.inf #wbreak, TBB e BBNorm < 0 hanno prior -inf
+        return log_prior
+
+    def _update_population(self, physical_parameters: np.ndarray, internal_parameters : np.ndarray) -> None:
+        self._mu_population, self._cov_population = fl.sample_normal_inverse_wishart(internal_parameters, 
+                                                                                     mu0=self.mu0,
+                                                                                     kappa0 =self.kappa0,
+                                                                                     nu0 = self.nu0,
+                                                                                     psi0 = self.psi0,
+                                                                                     rng = self.rng)
+
+    def _trace_shape(self, n_saved: int) -> Tuple:
+        return (n_saved, self.N_parameters, self.N_parameters + 1)
+
+    def _store_trace(self, trace: np.ndarray, idx: int) -> None:
+        mu_physical, cov_physical = self.convert_mu_cov_to_physical(self._mu_population, self._cov_population)
+        trace[idx, :, 0] = mu_physical
+        trace[idx, :, 1:] = cov_physical
+
+    def _get_population_state(self) -> Dict[str, np.ndarray]:
+        mu_physical, cov_physical = self.convert_mu_cov_to_physical(self._mu_population, self._cov_population)
+        return {
+            "mu": mu_physical,
+            "covariance": cov_physical,}
+    
+    def convert_mu_cov_to_physical(self, mu_population, cov_population):
+        mu_physical = self._to_physical_parameters(mu_population)
+        cov_physical = (cov_population * self.parameter_scaler.scale[:, None] * self.parameter_scaler.scale[None, :])
+
+        return mu_physical, cov_physical
+
+
+
 
 
 # ── backward-compatible wrapper functions ────────────────────────────

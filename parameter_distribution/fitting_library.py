@@ -1,6 +1,7 @@
 import sys 
 sys.path.append("../../")
 import numpy as np 
+from scipy.stats import invwishart
 from qsogen.fast_sed import get_colours_fast
 from numba import njit
 
@@ -64,8 +65,6 @@ def log_likelihood(theta,
 
 
 
-
-
 def sample_from_hist(nsamples, hist_edges, hist_weights, rng = None):
     if rng is None:
         rng = np.random.default_rng()
@@ -76,7 +75,7 @@ def sample_from_hist(nsamples, hist_edges, hist_weights, rng = None):
         bins = rng.choice(N_bins, size=nsamples, p=hist_weights[p])
         parameters[:, p] = (
             hist_edges[p, bins]
-            + rng.rand(nsamples)
+            + rng.random(nsamples)
             * (hist_edges[p, bins+1] - hist_edges[p, bins])
         )
     return parameters
@@ -227,3 +226,50 @@ def prepare_gaussian_likelihood(y,covariance,):
         log_norm[i] = (log_det + n_valid * np.log(2.0 * np.pi))
 
     return precision, log_norm, valid_mask
+
+
+
+def log_prior_from_multivariate_normal(parameters, mu, covariance,):
+    n_parameters = parameters.shape[1]
+    diff = parameters - mu
+    try:
+        L = np.linalg.cholesky(covariance)
+    except np.linalg.LinAlgError:
+        return np.full(parameters.shape[0],-np.inf,)
+    # Solve L y = (x-mu)
+    whitened = np.linalg.solve(L,diff.T,)
+    mahalanobis = np.sum(whitened**2, axis=0,)
+
+    log_det = ( 2.0 * np.sum(np.log(np.diag(L))))
+    log_prior = -0.5 * (mahalanobis + log_det + n_parameters * np.log(2.0 * np.pi))
+    return log_prior
+
+
+def sample_from_multivariate_normal(mu, covariance, nsamples, rng=None,):
+    if rng is None:
+        rng = np.random.default_rng()
+    return rng.multivariate_normal(mean=mu, cov=covariance, size=nsamples,)
+
+
+
+def sample_normal_inverse_wishart(parameters, mu0, kappa0, nu0,psi0, rng,):
+    """
+    Draw mu and covariance from the NIW posterior.
+    parameters : (N, d)
+    """
+
+    n, d = parameters.shape
+    xbar = np.mean(parameters,axis=0,)
+
+    centered = (parameters - xbar)
+    scatter = (centered.T @ centered)
+    kappa_n = kappa0 + n
+    nu_n = nu0 + n
+    mu_n = (kappa0 * mu0 + n * xbar) / kappa_n
+    delta = xbar - mu0
+    psi_n = psi0 + scatter + (kappa0 * n / kappa_n) * np.outer(delta,delta)
+    
+    covariance = invwishart.rvs(df=nu_n, scale=psi_n, random_state=rng,)
+    mu = rng.multivariate_normal(mean=mu_n, cov=covariance / kappa_n,)
+    
+    return mu, covariance
