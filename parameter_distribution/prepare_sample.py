@@ -233,11 +233,25 @@ class color_container_class:
         self.M_i = ( -2.5 * np.log10(self.mono_luminosity["L_2500"] * 2500 / 2.998e18) + 2.5 * np.log10(4*np.pi)
                      + 5 * np.log10(10 * constants.pc.cgs.value) - 2.5 * np.log10(1+2) -48.6).to_numpy()
 
-    def get_colors(self):
-       mag = self.magnitudes[..., 1]
-       err = self.magnitudes[..., 2]
-       self.colors = mag[..., :-1] - mag[..., 1:]
-       self.colors_errors = np.sqrt(err[..., :-1]**2 + err[..., 1:]**2)
+    def get_colors(self, ):
+        mag = self.magnitudes[..., 1]
+        err = self.magnitudes[..., 2]
+        self.colors = mag[..., :-1] - mag[..., 1:]
+        self.colors_errors = np.sqrt(err[..., :-1]**2 + err[..., 1:]**2)
+        variance_mag = err**2
+        n_sources = err.shape[0]
+        n_colors = err.shape[1] - 1
+        covariance_matrix = np.zeros((n_sources, n_colors, n_colors), dype = float)
+        idx = np.arange(n_colors)
+        # Diagonal  # Var(m_i - m_{i+1}): 
+        covariance_matrix[:, idx, idx] = variance_mag[:, :-1] + variance_mag[:, 1:]
+        # Off-diagonal # Cov(m_i-m_{i+1}, m_{i+1}-m_{i+2})
+        if n_colors > 1:
+            offdiag = -variance_mag[:, 1:-1]
+            covariance_matrix[:, idx[:-1], idx[1:]] = offdiag
+            covariance_matrix[:, idx[1:], idx[:-1]] = offdiag
+        self.colors_covariance = covariance_matrix
+
 
     def clean_colors_for_redshift(self,  wavelength_min = 912, wavelength_max = 3e4):
         """
@@ -255,7 +269,7 @@ class color_container_class:
             z_min, z_max = where_to_ignore(filter_1, filter_2, wavelength_min, wavelength_max)
             select = np.logical_or(self.redshift < z_min, self.redshift>z_max)
             self.colors[select, i] = np.nan
-            self.colors_errors[select, i] - np.nan
+            self.colors_errors[select, i] = np.nan
 
     def get_bins(self, user_bins=None, N_objects=None, N_bins=None, redshift_cuts=None):
 
@@ -321,7 +335,7 @@ class color_container_class:
             self.redshift_bins = get_quantiles(self.redshift, self.Nbins)
 
     def assign_bin(self, right = False):
-        self.bin = np.digitize(self.redshift, self.redshift_bins, right == right) -1 
+        self.bin = np.digitize(self.redshift, self.redshift_bins, right = right) -1 
     
     def get_clipped_colors(self, clipping_sigma=3, cenfunc = "median"):
         if not hasattr(self, "bin"):
@@ -365,14 +379,17 @@ class color_container_class:
             self.mean_values[i, :, 1] = colors[select].mean(axis = 0)
             self.mean_values[i, :, 2] = redshift[select].std()
             self.mean_values[i, :, 3] = colors[select].std(axis = 0)
-            self.mean_values[i, :, 4] = redshift[select].count()
+            self.mean_values[i, :, 4] = np.count_nonzero(select)
             self.mean_M_i[i] = Mi[select].mean()
     
-    def get_arrays(self, clipped = True):
+    def get_arrays(self, clipped = True, return_covariance = False):
         colors = self.colors[self.clip_mask] if clipped else self.colors
         colors_errors = self.colors_errors[self.clip_mask] if clipped else self.colors_errors
         redshift = self.redshift[self.clip_mask] if clipped else self.redshift
         Mi = self.M_i[self.clip_mask] if clipped else self.M_i
+        if return_covariance:
+            covariance = self.colors_covariance[self.clip_mask] if clipped else self.colors_covariance
+            return redshift, colors, colors_errors, Mi, covariance
         return redshift, colors, colors_errors, Mi
 
     def process_pipeline(self, 

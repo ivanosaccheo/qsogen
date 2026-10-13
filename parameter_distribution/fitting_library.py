@@ -5,7 +5,7 @@ from qsogen.fast_sed import get_colours_fast
 from numba import njit
 
 
-def log_likelihood(theta, y, yerr, grid, filters_properties,
+def log_likelihood_simple(theta, y, yerr, grid, filters_properties,
                     wavbrk3 = 1200,
                     plslp3_step = -1,
                     scalin = -0.993,
@@ -28,12 +28,52 @@ def log_likelihood(theta, y, yerr, grid, filters_properties,
     return loglike
 
 
+def log_likelihood(theta, 
+                y, 
+                precision,
+                log_norm,
+                valid_mask,
+                grid, 
+                filters_properties,
+                wavbrk3 = 1200,
+                plslp3_step = -1,
+                scalin = -0.993,
+                beslope = 0.183,
+                benrm = -27.0,
+                cont_norm_wav = 5500.0):
+    
+    model = get_colours_fast(theta, grid, filters_properties,
+                            wavbrk3 =  wavbrk3,
+                            plslp3_step = plslp3_step,
+                            scalin = scalin,
+                            beslope = beslope,
+                            benrm = benrm,
+                            cont_norm_wav = cont_norm_wav)
+    
 
-def sample_from_hist(nsamples, hist_edges, hist_weights):
+    bad_model = np.any(valid_mask & ~np.isfinite(model), axis=1)
+    residual = np.zeros_like(y, dtype=float)
+    valid = (valid_mask & np.isfinite(model))
+    residual[valid] = y[valid] - model[valid]
+    # r^T C^-1 r
+    chi2 = np.einsum("ni,nij,nj->n", residual, precision, residual, optimize=True,)
+    loglike = -0.5 * ( chi2 + log_norm)
+    loglike[bad_model] = -np.inf
+
+    return loglike
+
+
+
+
+
+def sample_from_hist(nsamples, hist_edges, hist_weights, rng = None):
+    if rng is None:
+        rng = np.random.default_rng()
+
     N_parameters, N_bins = hist_weights.shape
     parameters = np.empty((nsamples, N_parameters))
     for p in range(N_parameters):
-        bins = np.random.choice(N_bins, size=nsamples, p=hist_weights[p])
+        bins = rng.choice(N_bins, size=nsamples, p=hist_weights[p])
         parameters[:, p] = (
             hist_edges[p, bins]
             + np.random.rand(nsamples)
@@ -71,12 +111,15 @@ def log_prior_from_hist(parameters, hist_edges, hist_weights,
     return logp
 
 
-def update_histogram_weights(parameters, hist_edges, alpha_prior=None, ):
+def update_histogram_weights(parameters, hist_edges, alpha_prior=None, rng = None):
     """
     parameters  : (N_samples, N_parameters)
     hist_edges  : (N_parameters, N_bins+1)
     alpha_prior : (N_bins,) or None
     """
+    if rng is None:
+        rng = np.random.default_rng()
+
     N_samples, N_parameters = parameters.shape
     N_bins = hist_edges.shape[1] - 1
 
@@ -90,13 +133,17 @@ def update_histogram_weights(parameters, hist_edges, alpha_prior=None, ):
         valid = (idx >= 0) & (idx < N_bins)
         idx = idx[valid]
         counts = np.bincount(idx, minlength=N_bins)
-        hist_weights[p] = np.random.dirichlet(alpha_prior + counts)
+        hist_weights[p] = rng.dirichlet(alpha_prior + counts)
 
     return hist_weights
 
-def initialize_histogram_weights(N_parameters, N_bins):
-    hist_weights = np.random.dirichlet(alpha=np.ones(N_bins),
+def initialize_histogram_weights(N_parameters, N_bins, rng = None):
+    if rng is None:
+        rng = np.random.default_rng()
+
+    hist_weights = rng.dirichlet(alpha=np.ones(N_bins),
                size=N_parameters)
+    
     return hist_weights
 
 
@@ -111,9 +158,11 @@ def initialize_normal_parameters(N_parameters=5):
     return mu, variance
 
 
-def sample_from_normal(mu_array, variance_array, Nsamples):
+def sample_from_normal(mu_array, variance_array, Nsamples, rng = None):
+    if rng is None:
+        rng = np.random.default_rng()
     cov = np.diag(variance_array)
-    return np.random.multivariate_normal(mu_array, cov, size = Nsamples)
+    return rng.multivariate_normal(mu_array, cov, size = Nsamples)
 
 
 def log_prior_from_normal(parameters, mu, variance):
@@ -125,3 +174,56 @@ def log_prior_from_normal(parameters, mu, variance):
     log_prior[invalid] = -np.inf
     return log_prior
 
+
+def prepare_gaussian_likelihood(y,covariance,):
+    """
+    Pre-compute quantities needed for a multivariate
+    Gaussian likelihood.
+
+    Parameters
+    ----------
+    y : (Nobj, Ncolors)
+    covariance : (Nobj, Ncolors, Ncolors)
+
+    Returns
+    -------
+    precision : (Nobj, Ncolors, Ncolors)
+        Inverse covariance matrices, padded with zeros
+        for missing colours.
+
+    log_norm : (Nobj,)
+        log(det(C)) + N_valid * log(2*pi)
+
+    valid_mask : (Nobj, Ncolors)
+    """
+
+    n_obj, n_colors = y.shape
+
+    valid_mask = np.isfinite(y)
+
+    precision = np.zeros_like(covariance,dtype=float)
+    log_norm = np.zeros(n_obj,dtype=float,)
+
+    for i in range(n_obj):
+        valid_idx = np.flatnonzero(valid_mask[i])
+        n_valid = len(valid_idx)
+        if n_valid == 0:
+            raise ValueError(f"Object {i} has no valid colours")
+        C = covariance[i][np.ix_(valid_idx, valid_idx,)]
+        if not np.all(np.isfinite(C)):
+            raise ValueError(f"Non-finite covariance for object {i}")
+
+        #Cholesky is also a useful positive-definiteness check
+        try:
+            L = np.linalg.cholesky(C)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError(f"Covariance matrix for object {i} " 
+                             "is not positive definite.") from exc
+
+        C_inv = np.linalg.solve(C, np.eye(n_valid),)
+        precision[i][np.ix_(valid_idx, valid_idx,)] = C_inv
+        log_det = (2.0 * np.sum(np.log(np.diag(L))))
+        
+        log_norm[i] = (log_det + n_valid * np.log(2.0 * np.pi))
+
+        return precision, log_norm, valid_mask

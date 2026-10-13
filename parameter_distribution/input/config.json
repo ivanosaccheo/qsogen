@@ -42,7 +42,7 @@
         "seed": 1900,
         "verbose": true,
         "save_every": 10,
-        "checkpoint_every": 500,
+        "checkpoint_every": 512,
         "Nbins_hist": 250,
         "plslp1_hist": [
             -1.5,

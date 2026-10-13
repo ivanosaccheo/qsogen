@@ -93,7 +93,7 @@ def get_sim_theta(N, mean = None, var= None,
         if from_trace:
             idx = np.random.choice(len(hist_weights), size=N, replace=True)
             hist_weights = hist_weights[idx]
-            theta = np.array([fl.sample_from_hist(1, hist_edges, hw) for hw in hist_weights])
+            theta = np.array([fl.sample_from_hist(1, hist_edges, hw)[0] for hw in hist_weights])
         else:
             hist_weights = hist_weights/np.sum(hist_weights, axis =1)[:,None]
             theta = fl.sample_from_hist(N, hist_edges, hist_weights)
@@ -234,7 +234,6 @@ def generate_gaussians(x, mu, sigma, normalize = True):
         x = nparams, nvalues
     """
     
-
     if x.ndim == 1:
         x = x[None, :, None]  
     elif x.ndim == 2:

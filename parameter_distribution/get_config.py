@@ -32,8 +32,16 @@ gibbs_sampler_default_dict = {
 "adapt_factor": 1.2,
 "seed": 1900,
 "verbose": True,
+# save distribution
 "save_every" : 10,
-"checkpoint_every" : 500,
+"checkpoint_every" : 512,
+# Full chain of individual QSO parameters
+"save_parameter_chain": True,
+"parameter_save_every": 10,
+"parameter_chain_dtype": "float32",
+"parameter_chain_buffer_size": 512,
+"parameter_chain_compression": "lzf",
+#for MC steps
 "plslp1_scale" : 0.05,
 "plslp2_scale" : 0.05,
 "wavbrk_scale" : 80, 

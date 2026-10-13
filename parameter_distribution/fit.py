@@ -24,6 +24,7 @@ if config["saving"].get("add_date", True):
     filename = f"{filename}_{now}"
 filename_config = os.path.join(directory, filename + ".json")
 filename_checkpoint = os.path.join(directory, filename + ".h5")
+filename_parameter_chain = os.path.join(directory, filename + "_parameters.h5",)
 with open(filename_config, "w") as f:
     json.dump(config, f, indent=4)
 
@@ -45,7 +46,7 @@ sample_table = prepare_sample.prepare_sample(filename = options["SDSS_QSOs_filen
 
 colors = prepare_sample.color_container_class(sample_table)
 colors.process_pipeline(**config["binning"])
-redshift, y, yerr, m_i = colors.get_arrays(clipped = True)
+redshift, y, yerr, m_i, covariance = colors.get_arrays(clipped = True, return_covariance=True)
 Nagn = y.shape[0]
 N_parameters = 5
 
@@ -87,13 +88,20 @@ if options["population_prior"].lower() == "histogram":
                                     n_steps=options["Nsteps"],
                                     proposal_configs=proposal_configs,
                                     adapt_every=options["adapt_every"],
+                                    adapt_factor=options["adapt_factor"],
                                     target_acceptance=options["target_acceptance"],
                                     seed=options["seed"],
                                     verbose=options["verbose"],
                                     save_every=options["save_every"],
                                     checkpoint_file = filename_checkpoint,
-                                    checkpoint_every =  options["checkpoint_every"])
-    
+                                    checkpoint_every =  options["checkpoint_every"],
+                                    save_parameter_chain=options["save_parameter_chain"],
+                                    parameter_chain_file = filename_parameter_chain,
+                                    parameter_save_every=options["parameter_save_every"],
+                                    parameter_chain_dtype=options["parameter_chain_dtype"],
+                                    parameter_chain_buffer_size=options["parameter_chain_buffer_size"],
+                                    parameter_chain_compression=options["parameter_chain_compression"])
+
 elif options["population_prior"].lower() == "normal":
         gibbs_sampler = NormalGibbsSampler(
                                     y=y,
@@ -105,12 +113,20 @@ elif options["population_prior"].lower() == "normal":
                                     n_steps=options["Nsteps"],
                                     proposal_configs=proposal_configs,
                                     adapt_every=options["adapt_every"],
+                                    adapt_factor=options["adapt_factor"],
                                     target_acceptance=options["target_acceptance"],
                                     seed=options["seed"],
                                     verbose=options["verbose"],
                                     save_every=options["save_every"],
                                     checkpoint_file = filename_checkpoint,
-                                    checkpoint_every =  options["checkpoint_every"])
+                                    checkpoint_every =  options["checkpoint_every"],
+                                    save_parameter_chain=options["save_parameter_chain"],
+                                    parameter_chain_file = filename_parameter_chain,
+                                    parameter_save_every=options["parameter_save_every"],
+                                    parameter_chain_dtype=options["parameter_chain_dtype"],
+                                    parameter_chain_buffer_size=options["parameter_chain_buffer_size"],
+                                    parameter_chain_compression=options["parameter_chain_compression"])
+
 
 tic = time.perf_counter()
 result = gibbs_sampler.run()
