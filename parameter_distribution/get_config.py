@@ -42,11 +42,22 @@ gibbs_sampler_default_dict = {
 "parameter_chain_buffer_size": 512,
 "parameter_chain_compression": "lzf",
 #for MC steps
-"plslp1_scale" : 0.05,
-"plslp2_scale" : 0.05,
-"wavbrk_scale" : 80, 
-"tbb_scale" : 50,
-"bbnorm_scale" : 0.15
+"proposal_scale" : 0.05,
+# I parametri vengono scalati in modo da essere centrati in (xmax+xmin)/2 e 
+"parameter_lower": [
+    -1.0,
+    -0.5,
+    1500.0,
+    500.0,
+    0.0
+],
+"parameter_upper": [
+    0.5,
+    0.5,
+    10000.0,
+    2500.0,
+    9.0
+]
 }
 
 normal_population_default_dict = {}

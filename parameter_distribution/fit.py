@@ -9,7 +9,7 @@ import fitting_library as fl
 import prepare_sample
 from qsogen import fast_sed
 from qsogen import model_colours
-from gibbs_sampler import  HistogramGibbsSampler, NormalGibbsSampler, ProposalConfig
+from gibbs_sampler import  HistogramGibbsSampler, NormalGibbsSampler, ProposalConfig, ParameterScaler
 
 with open("input/config.json") as f:
     config = json.load(f)
@@ -56,14 +56,9 @@ filter_properties = model_colours.get_filters_properties()
 
 
 options = config.get("gibbs_sampler", {})
-proposal_configs = [
-    ProposalConfig(strategy="additive", scale = options["plslp1_scale"]),   # plslp1
-    ProposalConfig(strategy="additive", scale = options["plslp2_scale"]),   # plslp2
-    ProposalConfig(strategy="additive", scale = options["wavbrk_scale"]),   # wavbreak
-    ProposalConfig(strategy="additive", scale = options["tbb_scale"]),   # tbb
-    ProposalConfig(strategy="additive", scale = options["bbnorm_scale"]),   # bbnorm
-]
 
+parameter_scaler = ParameterScaler(lower=np.asarray(options["parameter_lower"], dtype=float,),
+                                   upper=np.asarray(options["parameter_upper"],dtype=float,))
 
 if options["population_prior"].lower() == "histogram":
     Nbins = options["Nbins_hist"]
@@ -86,7 +81,8 @@ if options["population_prior"].lower() == "histogram":
                                     emlines_grid=emlines_grid,
                                     filter_properties=filter_properties,
                                     n_steps=options["Nsteps"],
-                                    proposal_configs=proposal_configs,
+                                    parameter_scaler= parameter_scaler,
+                                    proposal_scale = options["proposal_scale"],
                                     adapt_every=options["adapt_every"],
                                     adapt_factor=options["adapt_factor"],
                                     target_acceptance=options["target_acceptance"],
@@ -111,7 +107,8 @@ elif options["population_prior"].lower() == "normal":
                                     emlines_grid=emlines_grid,
                                     filter_properties=filter_properties,
                                     n_steps=options["Nsteps"],
-                                    proposal_configs=proposal_configs,
+                                    parameter_scaler= parameter_scaler,
+                                    proposal_scale = options["proposal_scale"],
                                     adapt_every=options["adapt_every"],
                                     adapt_factor=options["adapt_factor"],
                                     target_acceptance=options["target_acceptance"],
