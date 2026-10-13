@@ -76,6 +76,7 @@ if options["population_prior"].lower() == "histogram":
                                     hist_edges=hist_edges,
                                     y=y,
                                     yerr=yerr,
+                                    y_cov = covariance, 
                                     redshift=redshift,
                                     m_i=m_i,
                                     emlines_grid=emlines_grid,
@@ -102,6 +103,7 @@ elif options["population_prior"].lower() == "normal":
         gibbs_sampler = NormalGibbsSampler(
                                     y=y,
                                     yerr=yerr,
+                                    y_cov = covariance, 
                                     redshift=redshift,
                                     m_i=m_i,
                                     emlines_grid=emlines_grid,

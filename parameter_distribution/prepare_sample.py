@@ -241,7 +241,7 @@ class color_container_class:
         variance_mag = err**2
         n_sources = err.shape[0]
         n_colors = err.shape[1] - 1
-        covariance_matrix = np.zeros((n_sources, n_colors, n_colors), dype = float)
+        covariance_matrix = np.zeros((n_sources, n_colors, n_colors), dtype = float)
         idx = np.arange(n_colors)
         # Diagonal  # Var(m_i - m_{i+1}): 
         covariance_matrix[:, idx, idx] = variance_mag[:, :-1] + variance_mag[:, 1:]

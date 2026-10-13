@@ -108,7 +108,7 @@ def propose_parameters(params: np.ndarray,
 
     return proposals, log_hastings
 
-def propose_parameters_simple(parameters: np.ndarry, scale : float,  rng: np.random.Generator):
+def propose_parameters_simple(parameters: np.ndarray, scale : float,  rng: np.random.Generator):
     return parameters + rng.normal(loc = 0.0, scale = scale, size=parameters.shape)
 
 PARAMETER_LOWER = np.array([
@@ -178,7 +178,7 @@ class GibbsSamplerResult:
     parameters_final: np.ndarray     # (Nagn, Npar)
     trace_hist: np.ndarray           # population-level trace (shape depends on prior)
     acceptance_rate: float           # overall acceptance fraction
-    scales_final: List[float]        # final proposal scales
+    proposal_scale_final: float        #final proposal scale
 
 
 # ── base class ───────────────────────────────────────────────────────
@@ -252,7 +252,7 @@ class GibbsSamplerBase(ABC):
         self.emlines_grid = emlines_grid
         self.filter_properties = filter_properties
         self.n_steps = n_steps
-        self.proposal_scale = proposal_scale,
+        self.proposal_scale = proposal_scale
         self.adapt_every = adapt_every
         self.target_acceptance = target_acceptance
         self.adapt_factor = adapt_factor
@@ -382,7 +382,7 @@ class GibbsSamplerBase(ABC):
                 maxshape = (None,) + new_data.shape[1:]
                 f.create_dataset("trace",data=new_data, maxshape=maxshape,chunks=True,)
                 f.create_dataset("parameters_current",data=parameters_current,)
-                f.create_dataset("scales", data=[c.scale for c in self.proposal_configs],)
+                f.create_dataset("proposal_scale", data=self.proposal_scale,)
                 pop = self._get_population_state()
                 grp = f.create_group("population")
                 for key, arr in pop.items():
@@ -400,12 +400,12 @@ class GibbsSamplerBase(ABC):
                    ds.resize(old_len + new_data.shape[0],axis=0)
                    ds[old_len:] = new_data
             # Always update current state
-            f["parameters_current"][...] = (parameters_current)
-            f["scales"][...] = [c.scale for c in self.proposal_configs]
-            pop = self._get_population_state()
-            for key, arr in pop.items():
-                f[f"population/{key}"][...] = arr
-        self._last_flushed_idx = new_end
+                f["parameters_current"][...] = (parameters_current)
+                f["proposal_scales"][...] = self.proposal_scale
+                pop = self._get_population_state()
+                for key, arr in pop.items():
+                    f[f"population/{key}"][...] = arr
+            self._last_flushed_idx = new_end
         
         if self.verbose:
             if has_new_trace:
@@ -501,7 +501,7 @@ class GibbsSamplerBase(ABC):
         
         if self.save_parameter_chain:
             self._initialize_parameter_chain_file()
-            self._buffer_parameter_state(0, parameters_current)
+            self._buffer_parameter_state(0, physical_parameters_current)
 
         n_saved = self.n_steps // self.save_every + 1
         trace = np.empty(self._trace_shape(n_saved))
@@ -529,8 +529,9 @@ class GibbsSamplerBase(ABC):
             physical_parameters_new = self._to_physical_parameters(parameters_new)
             # ── evaluate posterior ───────────────────────────────────
             theta_cur[:, 1:-1] = physical_parameters_new
-            ll_new = fl.log_likelihood(
-                theta_cur, self.y, self.yerr, self.emlines_grid, self.filter_properties)
+            ll_new = fl.log_likelihood(theta_cur, self.y, self.y_precision, 
+                                    self.y_log_norm, self.y_valid_mask,
+                                    self.emlines_grid, self.filter_properties)
             lp_new = self._log_prior(physical_parameters_new)
             logpost_new = ll_new + lp_new
 
@@ -577,29 +578,24 @@ class GibbsSamplerBase(ABC):
                 else:
                     self.proposal_scale *= self.adapt_factor
 
-        if self.verbose:
-            print(
-            f"step {step:4d} | "
-            f"accept {window_rate:.2%} | "
-            f"scales: "
-            f"{[f'{c.scale:.4g}' for c in self.proposal_configs]}")
-
-   
-        window_accept_count = 0
-        window_total_count = 0
+                if self.verbose:
+                    print(f"step {step:4d} | accept {window_rate:.2%} |"
+                          f"scale: {self.proposal_scale:4f}")
+                window_accept_count = 0
+                window_total_count = 0
 
         # ── final checkpoint ─────────────────────────────────────────
         self._flush_checkpoint(self.n_steps, trace, save_idx,
-                               parameters_current)    
+                               physical_parameters_current)    
         if self.save_parameter_chain:
             self._flush_parameter_chain_buffer()
         acceptance_rate = (global_accept_count / max(global_total_count, 1))
         
         return GibbsSamplerResult(
-            parameters_final=parameters_current.copy(),
+            parameters_final=physical_parameters_current.copy(),
             trace_hist=trace[:save_idx],
             acceptance_rate=acceptance_rate,
-            scales_final=[c.scale for c in self.proposal_configs],)
+            proposal_scale_final=self.proposal_scale)
 
 
 # ── histogram (Dirichlet) subclass ───────────────────────────────────
@@ -663,7 +659,7 @@ class NormalGibbsSampler(GibbsSamplerBase):
         self._mu_population, self._var_population = fl.initialize_normal_parameters(self.N_parameters)
 
     def _sample_initial_parameters(self) -> np.ndarray:
-        physical_parameters = fl.sample_from_normal(self._mu_population, self._var_population, self.Nagn)
+        physical_parameters = fl.sample_from_normal(self._mu_population, self._var_population, self.Nagn, rng = self.rng)
         return self._to_internal_parameters(physical_parameters)
 
     def _log_prior(self, physical_parameters: np.ndarray) -> np.ndarray:

@@ -76,7 +76,7 @@ def sample_from_hist(nsamples, hist_edges, hist_weights, rng = None):
         bins = rng.choice(N_bins, size=nsamples, p=hist_weights[p])
         parameters[:, p] = (
             hist_edges[p, bins]
-            + np.random.rand(nsamples)
+            + rng.rand(nsamples)
             * (hist_edges[p, bins+1] - hist_edges[p, bins])
         )
     return parameters
@@ -226,4 +226,4 @@ def prepare_gaussian_likelihood(y,covariance,):
         
         log_norm[i] = (log_det + n_valid * np.log(2.0 * np.pi))
 
-        return precision, log_norm, valid_mask
+    return precision, log_norm, valid_mask
