@@ -11,7 +11,7 @@ sample_default_dict = {
 "filtri_uncertainties" : "all",
 "uncertainties_thresholds" : 0.1, 
 "redshift_cut" :  [0, 10],
-"SDSS_QSOs_path" : "~/DATA/samples/SDSS",
+"SDSS_QSOs_path" : "~/DATA",
 }
 
 binning_default_dict = {
@@ -43,13 +43,13 @@ gibbs_sampler_default_dict = {
 "parameter_chain_compression": "lzf",
 #for MC steps
 "proposal_scale" : 0.05,
-# I parametri vengono scalati in modo da essere centrati in (xmax+xmin)/2 e 
+# I parametri vengono scalati in modo da essere centrati in 0 e avere xmin --> -1 xmax -->+1
 "parameter_lower": [
     -1.0,
     -0.5,
     1500.0,
     500.0,
-    0.0
+    1e-3
 ],
 "parameter_upper": [
     0.5,
@@ -57,7 +57,8 @@ gibbs_sampler_default_dict = {
     10000.0,
     2500.0,
     9.0
-]
+],
+"bbnorm_lognormal" : False,
 }
 
 normal_population_default_dict = {}
@@ -74,8 +75,9 @@ histogram_population_default_dict = {
 
 saving_default_dict = {
     "filename" : "sample_fitting",
-    "directory" : "~/WORK/",
-    "add_date" : True
+    "directory" : "~/DATA/MC_CHAINS",
+    "add_date" : False,
+    "resume" : True
     }
 
 

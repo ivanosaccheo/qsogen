@@ -54,7 +54,7 @@ def get_histograms_bins(config, hist_centers = True):
     return hist_edges
 
 
-def get_real_colors(config):
+def get_real_colors(config, return_covariance = False):
     options = config.get("sample", {})
     sample_table = prepare_sample.prepare_sample(filename = options["SDSS_QSOs_filename"],
                                 luminosity_cuts_low = options["luminosity_cuts_low"],
@@ -70,9 +70,9 @@ def get_real_colors(config):
                                 )
     colors = prepare_sample.color_container_class(sample_table)
     colors.process_pipeline(**config["binning"])
-    redshift, y, yerr, m_i = colors.get_arrays(clipped = True)
-    return redshift, y, yerr, m_i
-    
+    #redshift, y, yerr, m_i and covariance
+    return colors.get_arrays(clipped = True, return_covariance=return_covariance)
+
 
 def get_sim_theta(N, mean = None, var= None, 
                   hist_weights = None, 

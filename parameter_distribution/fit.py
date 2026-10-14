@@ -9,7 +9,8 @@ import fitting_library as fl
 import prepare_sample
 from qsogen import fast_sed
 from qsogen import model_colours
-from gibbs_sampler import  HistogramGibbsSampler, NormalGibbsSampler, ProposalConfig, ParameterScaler
+from gibbs_sampler import  HistogramGibbsSampler, NormalGibbsSampler, MultiNormalGibbsSampler
+import params_utility as pu
 
 with open("input/config.json") as f:
     config = json.load(f)
@@ -25,9 +26,9 @@ if config["saving"].get("add_date", True):
 filename_config = os.path.join(directory, filename + ".json")
 filename_checkpoint = os.path.join(directory, filename + ".h5")
 filename_parameter_chain = os.path.join(directory, filename + "_parameters.h5",)
+resume = config["saving"]["resume"]
 with open(filename_config, "w") as f:
     json.dump(config, f, indent=4)
-
 
 
 options = config.get("sample", {})
@@ -57,8 +58,12 @@ filter_properties = model_colours.get_filters_properties()
 
 options = config.get("gibbs_sampler", {})
 
-parameter_scaler = ParameterScaler(lower=np.asarray(options["parameter_lower"], dtype=float,),
-                                   upper=np.asarray(options["parameter_upper"],dtype=float,))
+if options["bbnorm_lognormal"]:
+    parameter_scaler = pu.LogLastParameterScaler(lower=np.asarray(options["parameter_lower"], dtype=float,),
+                                                upper=np.asarray(options["parameter_upper"],dtype=float,))
+else:
+    parameter_scaler = pu.IntervalScaler(lower=np.asarray(options["parameter_lower"], dtype=float,),
+                                                upper=np.asarray(options["parameter_upper"],dtype=float,))
 
 if options["population_prior"].lower() == "histogram":
     Nbins = options["Nbins_hist"]
@@ -126,9 +131,37 @@ elif options["population_prior"].lower() == "normal":
                                     parameter_chain_buffer_size=options["parameter_chain_buffer_size"],
                                     parameter_chain_compression=options["parameter_chain_compression"])
 
+elif options["population_prior"].lower() == "multivariate":
+        gibbs_sampler = MultiNormalGibbsSampler(
+                                    y=y,
+                                    yerr=yerr,
+                                    y_cov = covariance, 
+                                    redshift=redshift,
+                                    m_i=m_i,
+                                    emlines_grid=emlines_grid,
+                                    filter_properties=filter_properties,
+                                    n_steps=options["Nsteps"],
+                                    parameter_scaler= parameter_scaler,
+                                    proposal_scale = options["proposal_scale"],
+                                    adapt_every=options["adapt_every"],
+                                    adapt_factor=options["adapt_factor"],
+                                    target_acceptance=options["target_acceptance"],
+                                    seed=options["seed"],
+                                    verbose=options["verbose"],
+                                    save_every=options["save_every"],
+                                    checkpoint_file = filename_checkpoint,
+                                    checkpoint_every =  options["checkpoint_every"],
+                                    save_parameter_chain=options["save_parameter_chain"],
+                                    parameter_chain_file = filename_parameter_chain,
+                                    parameter_save_every=options["parameter_save_every"],
+                                    parameter_chain_dtype=options["parameter_chain_dtype"],
+                                    parameter_chain_buffer_size=options["parameter_chain_buffer_size"],
+                                    parameter_chain_compression=options["parameter_chain_compression"])
+
 
 tic = time.perf_counter()
-result = gibbs_sampler.run()
+print("Starting the sampler run", flush = True)
+result = gibbs_sampler.run(resume = resume)
 toc = time.perf_counter()
 print(f"Sampling required {(toc-tic)/3600} ours")
 

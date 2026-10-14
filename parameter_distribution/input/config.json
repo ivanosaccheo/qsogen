@@ -34,23 +34,44 @@
         "N_bins": null
     },
     "gibbs_sampler": {
-        "population_prior": "histogram",
-        "Nsteps": 100000,
+        "population_prior": "multivariate",
+        "Nsteps": 300000,
         "adapt_every": 50,
         "target_acceptance": 0.35,
-        "adapt_factor": 1.1,
+        "adapt_factor": 1.2,
         "seed": 1900,
         "verbose": true,
         "save_every": 10,
         "checkpoint_every": 512,
-        "Nbins_hist": 250,
+        "save_parameter_chain": true,
+        "parameter_save_every": 25,
+        "parameter_chain_dtype": "float32",
+        "parameter_chain_buffer_size": 512,
+        "parameter_chain_compression": "lzf",
+        "proposal_scale": 0.05,
+        "parameter_lower": [
+            -1.0,
+            -0.5,
+            1500.0,
+            500.0,
+            0.001
+        ],
+        "parameter_upper": [
+            0.5,
+            0.5,
+            10000.0,
+            2500.0,
+            9.0
+        ],
+        "bbnorm_lognormal": true,
+        "Nbins_hist": 100,
         "plslp1_hist": [
-            -1.5,
-            1.5
+            -1,
+            0.5
         ],
         "plslp2_hist": [
-            -1.5,
-            1.5
+            -0.5,
+            0.5
         ],
         "wavbrk_hist": [
             1500,
@@ -64,16 +85,12 @@
             0,
             9
         ],
-        "wavbrk_hist_log": true,
-        "plslp1_scale": 0.05,
-        "plslp2_scale": 0.05,
-        "wavbrk_scale": 80,
-        "tbb_scale": 50,
-        "bbnorm_scale": 0.15
+        "wavbrk_hist_log": true
     },
     "saving": {
-        "filename": "histogram_population",
+        "filename": "multivariate_fitting_lognorm",
         "directory": "~/DATA/MC_CHAINS",
-        "add_date": true
+        "add_date": false,
+        "resume": false
     }
 }

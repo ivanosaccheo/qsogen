@@ -287,43 +287,56 @@ class color_container_class:
         elif redshift_cuts is not None:
             redshift_cuts = np.array(redshift_cuts).flatten()
             bins = np.digitize(self.redshift, redshift_cuts)
-    
+
             quantiles = []
             self.Nbins = 0
-    
-            try:
-                for unique_bin, nobj in zip(np.unique(bins), N_objects, strict=True):
-    
+            
+            if N_objects is not None:
+                if len(N_objects) != len(redshift_cuts) + 1:
+                   raise ValueError("N_objects must have one element for each "
+                                    "redshift interval: len(redshift_cuts) + 1")
+
+                for unique_bin, nobj in enumerate(N_objects):
                     idx = bins == unique_bin
                     n_slice = np.sum(idx)
     
-                    nbins = max(1, int(np.ceil(n_slice / nobj)))
+                    if n_slice == 0:
+                        print(f"No QSOs in redshift region {unique_bin}, skipping")
+                        continue
+    
+                    nbins = max(1,int(np.ceil(n_slice / nobj)))
     
                     quantiles.append(get_quantiles(self.redshift[idx], nbins))
-                    self.Nbins += nbins
     
+                    self.Nbins += nbins
                     print(f"Grouping {n_slice} QSOs in {nbins} bins")
-    
-            except TypeError:
-    
+
+
+            else:
+                if len(N_bins) != len(redshift_cuts) + 1:
+                    raise ValueError("N_bins must have one element for each redshift interval: len(redshift_cuts) + 1")
+
                 print("Using fixed number of bins for each redshift cut")
-    
-                for unique_bin, nbins in zip(np.unique(bins), N_bins, strict=True):
-    
+
+                for unique_bin, nbins in enumerate(N_bins):
                     idx = bins == unique_bin
                     n_slice = np.sum(idx)
-    
+        
+                    if n_slice == 0:
+                        print(f"No QSOs in redshift region {unique_bin}, skipping")
+                        continue
+        
                     quantiles.append(get_quantiles(self.redshift[idx], nbins))
                     self.Nbins += nbins
-    
+        
                     print(f"Grouping {n_slice} QSOs in fixed {nbins} bins")
-    
-            edges = np.hstack([q[:-1] for q in quantiles])
-            edges = np.append(edges, quantiles[-1][-1])
+
+
+            edges = np.hstack( [q[:-1] for q in quantiles])
+            edges = np.append(edges,quantiles[-1][-1])
             self.redshift_bins = edges
     
         else:
-    
             if isinstance(N_objects, int):
                 self.Nbins = max(1, int(np.ceil(len(self.redshift) / N_objects)))
                 print(f"Returning {self.Nbins} bins with {N_objects} objects each")
