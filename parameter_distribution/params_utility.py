@@ -126,18 +126,6 @@ class LogLastParameterScaler(IntervalScaler):
         physical[..., -1] = np.exp(physical[..., -1])
         return physical
 
-    def to_internal(self,physical_parameters):
-        transformed = np.array(physical_parameters, dtype=float,copy=True,)
-        if np.any(transformed[..., -1] <= 0):
-            raise ValueError("Last parameter (BBnorm) must be strictly positive")
-
-        transformed[..., -1] = np.log(transformed[..., -1])
-        return (transformed - self.center) / self.scale
-
-    def to_physical(self, internal_parameters,):
-        physical = self.center + self.scale * internal_parameters
-        physical[..., -1] = np.exp(physical[..., -1])
-        return physical
     
 DEFAULT_PARAMETER_SCALER = IntervalScaler(lower=PARAMETER_LOWER,upper=PARAMETER_UPPER,)
 

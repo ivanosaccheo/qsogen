@@ -114,6 +114,7 @@ class GibbsSamplerBase(ABC):
         n_steps: int = 500,
         
         parameter_scaler: Optional[pu.ParameterScaler] = None,
+        n_warmup: int = 20000,
         proposal_scale = 0.05,
         adapt_every: int = 50,
         target_acceptance: float = 0.35,
@@ -140,6 +141,7 @@ class GibbsSamplerBase(ABC):
         self.emlines_grid = emlines_grid
         self.filter_properties = filter_properties
         self.n_steps = n_steps
+        self.n_warmup = n_warmup
         self.proposal_scale = proposal_scale
         self.adapt_every = adapt_every
         self.target_acceptance = target_acceptance
@@ -624,7 +626,7 @@ class GibbsSamplerBase(ABC):
             global_total_count += self.Nagn
 
             # ── adapt proposal scales ────────────────────────────────
-            if (self.adapt_every > 0) and (step % self.adapt_every == 0):
+            if (step < self.n_warmup) and (self.adapt_every > 0) and (step % self.adapt_every == 0):
                 window_rate = (window_accept_count / max(window_total_count, 1))
                 if window_rate < self.target_acceptance:
                     self.proposal_scale /= self.adapt_factor
