@@ -58,7 +58,7 @@ gibbs_sampler_default_dict = {
     2500.0,
     9.0
 ],
-"bbnorm_lognormal" : False,
+"parameter_scaler": "interval" 
 }
 
 normal_population_default_dict = {}

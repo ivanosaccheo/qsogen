@@ -285,6 +285,14 @@ class GibbsSamplerBase(ABC):
                 f.attrs["save_every"] = self.save_every
                 f.attrs["N_parameters"] = self.N_parameters
                 f.attrs["sampler_class"] = self.__class__.__name__
+
+                f.attrs["format_version"] = 2
+                f.attrs["population_space"] = "internal"
+                scaler_group = f.create_group("scaler")
+                scaler_group.attrs["class"] = self.parameter_scaler.__class__.__name__
+                scaler_group.create_dataset("lower", data=self.parameter_scaler.lower)
+                scaler_group.create_dataset("upper", data=self.parameter_scaler.upper,)
+
                 # Acceptance/adaptation state
                 f.attrs["window_accept_count"] = window_accept_count
                 f.attrs["window_total_count"] = window_total_count
@@ -373,7 +381,10 @@ class GibbsSamplerBase(ABC):
                 
             if saved_save_every != self.save_every :
                 raise ValueError("save_every must be the same when resuming a chain")
-
+            
+            #Validate scaler
+            self._validate_scaler(f)
+            
             # Completed step
             completed_step = int(f.attrs["step"])
 
@@ -427,6 +438,21 @@ class GibbsSamplerBase(ABC):
                 f["steps"].resize(n_keep, axis=0,)
                 f.flush()
     
+    def _validate_scaler(self, f,):
+        grp = f["scaler"]
+        saved_class = grp.attrs["class"]
+
+        if isinstance(saved_class,bytes,):
+            saved_class = saved_class.decode()
+        
+        current_class = self.parameter_scaler.__class__.__name__
+        if saved_class != current_class:
+            raise ValueError("Parameter scaler differs from checkpoint")
+        if not np.allclose(grp["lower"][:],self.parameter_scaler.lower,):
+            raise ValueError("Scaler lower differs from checkpoint")
+        if not np.allclose(grp["upper"][:], self.parameter_scaler.upper,):
+            raise ValueError("Scaler upper differs from checkpoint")
+    
     
     def _initialize_parameter_chain_file(self) -> None:
         if not self.save_parameter_chain:
@@ -443,6 +469,7 @@ class GibbsSamplerBase(ABC):
             f.attrs["N_parameters"] = self.N_parameters
             f.attrs["save_every"] = self.parameter_save_every
             f.attrs["dtype"] = str(self.parameter_chain_dtype)
+            f.attrs["parameter_space"] = "internal"
     
             f.create_dataset("parameters", shape=(0, self.Nagn, self.N_parameters,),
                             maxshape=(None, self.Nagn, self.N_parameters,),
@@ -497,7 +524,10 @@ class GibbsSamplerBase(ABC):
 
     def _to_physical_parameters(self, internal_parameters: np.ndarray) -> np.ndarray:
         return self.parameter_scaler.to_physical(internal_parameters)
-   
+
+    def _invalid_physical_parameters(self, physical_parameters):
+        return np.any(physical_parameters[..., -3:] <= 0, axis=-1)
+
     # ── main loop ────────────────────────────────────────────────────
 
     def run(self,
@@ -550,7 +580,7 @@ class GibbsSamplerBase(ABC):
             
             if self.save_parameter_chain:
                 self._initialize_parameter_chain_file()
-                self._buffer_parameter_state(0, physical_parameters_current)
+                self._buffer_parameter_state(0, internal_parameters_current)
     
         # Initial log-posterior
         theta_cur = np.column_stack((self.redshift, physical_parameters_current, self.m_i))
@@ -608,7 +638,7 @@ class GibbsSamplerBase(ABC):
                 window_total_count = 0
             
             #Save inidividual sources parameters
-            self._buffer_parameter_state(step, physical_parameters_current)
+            self._buffer_parameter_state(step, internal_parameters_current)
 
             # ── save trace ───────────────────────────────────────────
             if step % self.save_every == 0:
@@ -659,34 +689,37 @@ class HistogramGibbsSampler(GibbsSamplerBase):
     """Gibbs sampler with histogram/Dirichlet population prior."""
 
     def __init__(self, *, hist_edges: np.ndarray, **kwargs):
-        self.hist_edges = hist_edges
+        self.hist_edges_physical = np.asarray(hist_edges, dtype =float)
         self.Nbins = hist_edges.shape[1] - 1
-        self._hist_weights: Optional[np.ndarray] = None
-        self._widths = hist_edges[:, 1:] - hist_edges[:, :-1]
+        self._hist_weights = None
         super().__init__(**kwargs)
-
+        self.hist_edges_internal = self.parameter_scaler.edges_to_internal(self.hist_edges_physical)
+        self._widths_internal = self.hist_edges_internal[:, 1:] - self.hist_edges_internal[:, :-1]
+        
     def _get_n_parameters(self) -> int:
-        return self.hist_edges.shape[0]
+        return self.hist_edges_physical.shape[0]
 
     def _init_population(self) -> None:
         self._hist_weights = fl.initialize_histogram_weights(
                             self.N_parameters, self.Nbins, rng = self.rng)
 
     def _sample_initial_parameters(self) -> np.ndarray:
-        physical_parameters = fl.sample_from_hist(self.Nagn, self.hist_edges, 
-                                   self._hist_weights, rng = self.rng)
-        return self._to_internal_parameters(physical_parameters)
+        internal_parameters = fl.sample_from_hist(self.Nagn, self.hist_edges_internal, 
+                                        self._hist_weights, rng = self.rng)
+        return internal_parameters
 
     def _log_prior(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> np.ndarray:
-        log_densities = np.log((self._hist_weights / self._widths) + 1e-5)
-        return fl.log_prior_from_hist(physical_parameters, 
-                                      self.hist_edges, 
-                                      self._hist_weights,
-                                      log_densities=log_densities,)
+        log_densities = np.log((self._hist_weights / self._widths_internal) + 1e-5)
+        log_prior = fl.log_prior_from_hist(internal_parameters, self.hist_edges_internal, 
+                                    self._hist_weights, log_densities=log_densities,)
+        invalid = self._invalid_physical_parameters(physical_parameters)
+        log_prior[invalid] = -np.inf
+        
+        return log_prior
 
     def _update_population(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> None:
-        self._hist_weights = fl.update_histogram_weights(physical_parameters, 
-                                                        self.hist_edges, 
+        self._hist_weights = fl.update_histogram_weights(internal_parameters, 
+                                                        self.hist_edges_internal, 
                                                         rng = self.rng)
 
     def _trace_shape(self, n_saved: int) -> Tuple:
@@ -718,19 +751,30 @@ class NormalGibbsSampler(GibbsSamplerBase):
         return self._n_parameters
 
     def _init_population(self) -> None:
-        self._mu_population, self._var_population = fl.initialize_normal_parameters(self.N_parameters)
+        self._mu_population, self._var_population =  np.zeros(self.N_parameters), np.ones(self.N_parameters)
 
     def _sample_initial_parameters(self) -> np.ndarray:
-        physical_parameters = fl.sample_from_normal(self._mu_population, self._var_population, self.Nagn, rng = self.rng)
-        return self._to_internal_parameters(physical_parameters)
+        internal_parameters = fl.sample_from_normal(self._mu_population, self._var_population, self.Nagn, rng = self.rng)
+        physical_parameters = self._to_physical_parameters(internal_parameters)
+        invalid = self._invalid_physical_parameters(physical_parameters)
+        while np.any(invalid):
+            n_invalid = np.count_nonzero(invalid)
+            internal_parameters[invalid] = fl.sample_from_normal(self._mu_population, self._var_population,
+                                                                 n_invalid, rng=self.rng,)
+            physical_parameters[invalid] = self._to_physical_parameters(internal_parameters[invalid])
+            invalid = (self._invalid_physical_parameters(physical_parameters))
+        return internal_parameters
 
     def _log_prior(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> np.ndarray:
-        return fl.log_prior_from_normal(physical_parameters, self._mu_population, self._var_population)
+        log_prior = fl.log_prior_from_normal(internal_parameters, self._mu_population, self._var_population)
+        invalid = self._invalid_physical_parameters(physical_parameters)
+        log_prior[invalid] = -np.inf
+        return log_prior
 
     def _update_population(self, physical_parameters: np.ndarray, internal_parameters : np.ndarray) -> None:
-        sample_mean = np.mean(physical_parameters, axis=0)
+        sample_mean = np.mean(internal_parameters, axis=0)
         self._mu_population = self.rng.normal(sample_mean, np.sqrt(self._var_population / self.Nagn))
-        residuals = physical_parameters - self._mu_population
+        residuals = internal_parameters - self._mu_population
         sq_residuals = np.sum(residuals**2, axis=0)
         sq_residuals = np.maximum(sq_residuals, 1e-12) #Avoid numeric inifinites
         self._var_population = 1.0 / self.rng.gamma(shape=self.Nagn / 2.0,
@@ -805,7 +849,7 @@ class MultiNormalGibbsSampler(GibbsSamplerBase):
 
     def _log_prior(self, physical_parameters: np.ndarray, internal_parameters: np.ndarray) -> np.ndarray:
         log_prior =  fl.log_prior_from_multivariate_normal(internal_parameters, self._mu_population, self._cov_population)
-        invalid = np.any(physical_parameters[:, -3:]<0, axis =1) 
+        invalid = self._invalid_physical_parameters(physical_parameters)
         log_prior[invalid] = -np.inf #wbreak, TBB e BBNorm < 0 hanno prior -inf
         return log_prior
 
@@ -816,14 +860,13 @@ class MultiNormalGibbsSampler(GibbsSamplerBase):
                                                                                      nu0 = self.nu0,
                                                                                      psi0 = self.psi0,
                                                                                      rng = self.rng)
-
     def _trace_shape(self, n_saved: int) -> Tuple:
         return (n_saved, self.N_parameters, self.N_parameters + 1)
 
     def _store_trace(self, trace: np.ndarray, idx: int) -> None:
-        mu_physical, cov_physical = self.convert_mu_cov_to_physical(self._mu_population, self._cov_population)
-        trace[idx, :, 0] = mu_physical
-        trace[idx, :, 1:] = cov_physical
+        #mu_physical, cov_physical = self.convert_mu_cov_to_physical(self._mu_population, self._cov_population)
+        trace[idx, :, 0] = self._mu_population
+        trace[idx, :, 1:] = self._cov_population
 
     def _get_population_state(self) -> Dict[str, np.ndarray]:
         mu_physical, cov_physical = self.convert_mu_cov_to_physical(self._mu_population, self._cov_population)

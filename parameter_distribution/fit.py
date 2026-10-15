@@ -58,12 +58,9 @@ filter_properties = model_colours.get_filters_properties()
 
 options = config.get("gibbs_sampler", {})
 
-if options["bbnorm_lognormal"]:
-    parameter_scaler = pu.LogLastParameterScaler(lower=np.asarray(options["parameter_lower"], dtype=float,),
-                                                upper=np.asarray(options["parameter_upper"],dtype=float,))
-else:
-    parameter_scaler = pu.IntervalScaler(lower=np.asarray(options["parameter_lower"], dtype=float,),
-                                                upper=np.asarray(options["parameter_upper"],dtype=float,))
+parameter_scaler = pu.make_scaler(options.get("parameter_scaler", "interval"),
+                                lower=np.asarray(options["parameter_lower"], dtype=float,),
+                                upper=np.asarray(options["parameter_upper"],dtype=float,))
 
 if options["population_prior"].lower() == "histogram":
     Nbins = options["Nbins_hist"]

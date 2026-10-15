@@ -12,7 +12,7 @@ PARAMETER_LOWER = np.array([
     -0.5,      # plslp2
     1500.0,    # wavbrk
     500.0,     # tbb
-    1.e-3,       # bbnorm
+    0.7,       # bbnorm
     ])
 
 PARAMETER_UPPER = np.array([0.5, 0.5, 10000.0, 2500.0, 9.0])
@@ -29,6 +29,14 @@ class ParameterScaler(ABC):
     def to_physical(self, internal_parameters):
         """
         standardized MCMC coordinates -> physical
+        """
+        ...
+
+    @abstractmethod
+    def edges_to_internal(self, physical_edges):
+        """
+        physical_edges shape:
+            (N_parameters, N_edges)
         """
         ...
 
@@ -62,10 +70,61 @@ class IntervalScaler(ParameterScaler):
 
     def to_physical(self, internal_parameters):
         return self.center + self.scale * internal_parameters
+    
+    def edges_to_internal(self,physical_edges,):
+        physical_edges = np.asarray(physical_edges,dtype=float,)
+
+        if (physical_edges.shape[0] != len(self.lower)):
+            raise ValueError("Wrong number of parameters in physical_edges")
+        
+        return self.to_internal(physical_edges.T).T
 
 
 @dataclass(frozen=True)
 class LogLastParameterScaler(IntervalScaler):
+       
+    def __post_init__(self):
+        super().__post_init__()
+        if self.lower[-1] <= 0:
+            raise ValueError("Lower reference value for BBnorm must be strictly positive")
+        if self.upper[-1] <= 0:
+            raise ValueError("Upper reference value for BBnorm must be strictly positive")
+        
+
+    @property
+    def transformed_lower(self):
+        lower = self.lower.copy()
+        lower[-1] = np.log(lower[-1])
+        return lower
+
+    @property
+    def transformed_upper(self):
+        upper = self.upper.copy()
+        upper[-1] = np.log(upper[-1])
+        return upper
+
+    @property
+    def center(self):
+        return 0.5 * (self.transformed_lower + self.transformed_upper)
+
+    @property
+    def scale(self):
+        return 0.5 * (self.transformed_upper - self.transformed_lower)
+
+    def to_internal(self, physical_parameters,):
+        
+        physical_parameters = np.asarray(physical_parameters, dtype=float,)
+        if np.any(physical_parameters[..., -1] <= 0):
+            raise ValueError( "BBnorm must be strictly positive")
+
+        transformed = physical_parameters.copy()
+        transformed[..., -1] = np.log(transformed[..., -1])
+        return (transformed - self.center) / self.scale
+
+    def to_physical(self, internal_parameters,):
+        physical = self.center + self.scale * np.asarray(internal_parameters,dtype=float,)
+        physical[..., -1] = np.exp(physical[..., -1])
+        return physical
 
     def to_internal(self,physical_parameters):
         transformed = np.array(physical_parameters, dtype=float,copy=True,)
@@ -80,26 +139,28 @@ class LogLastParameterScaler(IntervalScaler):
         physical[..., -1] = np.exp(physical[..., -1])
         return physical
     
-    @property
-    def center(self):
-        return 0.5 * (self.transformed_lower + self.transformed_upper)
-    @property
-    def scale(self):
-        return 0.5 * (self.transformed_upper - self.transformed_lower)
-    
-    @property
-    def transformed_lower(self):
-        lower = self.lower.copy()
-        lower[-1] = np.log(lower[-1])
-        return lower
-    
-    @property
-    def transformed_upper(self):
-        upper = self.upper.copy()
-        upper[-1] = np.log(upper[-1])
-        return upper
-
 DEFAULT_PARAMETER_SCALER = IntervalScaler(lower=PARAMETER_LOWER,upper=PARAMETER_UPPER,)
+
+SCALER_REGISTRY = {"interval": IntervalScaler,
+                  "log_last": LogLastParameterScaler,
+                   }
+
+
+SCALER_CLASS_REGISTRY = {
+                    "IntervalScaler": IntervalScaler,
+                    "LogLastParameterScaler": LogLastParameterScaler,}
+
+
+def make_scaler( name, lower, upper):
+    try:
+        cls = SCALER_REGISTRY[name]
+    except KeyError:
+        raise ValueError(f"Unknown parameter scaler: {name}")
+    
+    return cls(lower=np.asarray(lower), upper=np.asarray(upper))
+
+
+
 
 
 #####Not needed anymore
