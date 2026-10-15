@@ -168,9 +168,6 @@ def log_prior_from_normal(parameters, mu, variance):
     diff = (parameters - mu)
     log_det_term = np.log(2 * np.pi * variance)
     log_prior = -0.5 * np.sum(diff**2/variance + log_det_term, axis =1)
-
-    invalid = np.any(parameters[:, -3:] < 0, axis=1)  #wavbreak, tbb e bbnorm. >0
-    log_prior[invalid] = -np.inf
     return log_prior
 
 
