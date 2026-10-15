@@ -196,7 +196,8 @@ for band in ['GALEX_NUV',
 
 
 # default zeropoints use AB for SDSS and Vega for UKIDSS and WISE
-def get_colours(redshifts, M_i = None,
+def get_colours(redshifts,
+                M_i = None,
                 filters=['SDSS_u_AB',
                          'SDSS_g_AB',
                          'SDSS_r_AB',
@@ -208,6 +209,7 @@ def get_colours(redshifts, M_i = None,
                          'UKIDSS_K_Vega',
                          'WISE_W1_Vega',
                          'WISE_W2_Vega'],
+                dw = 1.0, 
                 **kwargs):
     """Get synthetic colours from quasar model.
 
@@ -217,6 +219,7 @@ def get_colours(redshifts, M_i = None,
         List or array of redshifts
     filters : array, optional
         List of filter passbands to compute colours between.
+    dw : grid separation used to evaluate the SEDs
     **kwargs
         Arguments to pass to Quasar_sed.
 
@@ -226,17 +229,10 @@ def get_colours(redshifts, M_i = None,
         Array with model colours for each redshift in redshifts.
 
     Notes
-    -----
-    Wavelength array in Quasar_sed must cover rest-frame 4000-5000 Angstroms,
-    if gflag is set to True.
-    get_colours concatenates and sorts the wavelength arrays of the filter
-    response functions, and uses this as the input wavelength array to
-    Quasar_sed. This is computationally much faster as it means the model is
-    only evaluated at the wavelengths it's actually needed and avoids
-    unnecessary interpolation. However, this can lead to errors if the host
-    galaxy is turned on and an unusually sparse combination of filters is
-    requested.
+
     """
+    redshifts = np.atleast_1d(redshifts)
+    N = len(redshifts)
 
     waves, responses = [], []
     for band in filters:
@@ -246,32 +242,28 @@ def get_colours(redshifts, M_i = None,
         responses.append(resparrs[band])
 
     obs_wavlen = np.concatenate(waves)
-    isort = obs_wavlen.argsort().argsort()
-    # indices to invert the sorting on the concatenated array
-    split_indices = np.cumsum([len(wav) for wav in waves[:-1]])
-    # indices to invert the concatenation
+    required_rest_wav = obs_wavlen[None, :] / (1 + redshifts[:, None])
+    wmin = min(required_rest_wav.min(), 890.0)
+    wmax = max(required_rest_wav.max(), 7000.0)
 
-    model_colours = []
-    if M_i is None:
-        M_i = [None for i in redshifts]
-    elif np.isscalar(M_i):
-        M_i = np.repeat(np.atleast_1d(M_i), len(redshifts))
-    for z, mi in zip(np.atleast_1d(redshifts), np.atleast_1d(M_i), strict = True):
-        rest_ordered_wav = np.sort(obs_wavlen/(1+z))
-        # now in rest frame of qso
-        ordered_flux = Quasar_sed(wavlen=rest_ordered_wav,
-                                      z=z, M_i = mi,
-                                      **kwargs).flux
-        # qsosed will produce redshifted flux
+    rest_wav = np.arange(wmin, wmax + dw, dw)
 
-        # Create individual arrays with the flux in each observed passband
-        fluxes = np.split(ordered_flux[isort], split_indices)
+    sed = Quasar_sed(wavlen=rest_wav, z = redshifts, M_i = M_i, **kwargs)
+    flux = np.atleast_2d(sed.flux)
+    filter_flux = _interp_rows(rest_wav,flux,required_rest_wav)
+    
+    mags = np.empty((N, len(filters)))
+    i0 = 0
 
-        model_colours.append(-np.diff(sed2mags(filters,
-                                                waves,
-                                                fluxes,
-                                                responses)))
-    return(np.array(model_colours))
+    for i, (band, wave, response) in enumerate(zip(filters, waves, responses)):
+        i1 = i0 + len(wave)
+        flux_i = filter_flux[:, i0:i1]
+        integrated_flux = simpson(wave[None, :] * response[None, :] * flux_i, x=wave, axis=1)
+        mags[:, i] = -2.5 * np.log10(integrated_flux / zeropoints[band])
+        i0 = i1
+
+    return -np.diff(mags, axis=1)
+    
 
 
 def get_mags(redshifts,
@@ -371,6 +363,32 @@ def sed2mags(filters, waves, fluxes, responses):
             mags[i] = -2.5*np.log10(flux/zeropoints[filters[i]])
 
         return(mags)
+
+def _interp_rows(x, y, xnew):
+    """
+    Linear interpolation of N different y(x) evaluated at N different xnew.
+     Parameters
+    ----------
+    x : (M,)
+        Common x grid.
+    y : (N, M)
+        N functions evaluated on x.
+    xnew : (N, K)
+        Evaluation points for each function.
+
+    Returns
+    -------
+    ynew : (N, K)
+    """
+    idx = np.searchsorted(x, xnew)
+
+    idx = np.clip(idx, 1, len(x) - 1)
+    x0 = x[idx - 1]
+    x1 = x[idx]
+    y0 = np.take_along_axis(y, idx - 1, axis=1)
+    y1 = np.take_along_axis(y, idx, axis=1)
+    weight = (xnew - x0) / (x1 - x0)
+    return y0 + weight * (y1 - y0)
 
 
 def produce_zeropoints(system='Vega',
