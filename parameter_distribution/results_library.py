@@ -102,10 +102,15 @@ def get_sim_theta(N, mean = None, var= None,
 
 def get_sim_colors(redshift, theta, m_i):
     interps = fast_sed.make_interps()
-    emlines_grid = fast_sed.build_template_grid(interps)
+    templates_grid = fast_sed.build_template_grid(interps, fast_sed.read_galaxy_template())
     filter_properties = model_colours.get_filters_properties()
+    gflag = True
+    if theta.shape[1] == 5:
+        fragal = np.zeros(theta.shape[0])
+        gplind = np.zeros(theta.shape[0])
+        theta = np.column_stack([theta, fragal, gplind])
     theta = np.column_stack([redshift, theta, m_i])
-    sim_colors = fast_sed.get_colours_fast(theta, emlines_grid, filter_properties)
+    sim_colors = fast_sed.get_colours_fast(theta, templates_grid, filter_properties, gflag = gflag)
     return sim_colors
 
 

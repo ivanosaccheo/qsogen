@@ -52,7 +52,7 @@ Nagn = y.shape[0]
 N_parameters = 5
 
 interps = fast_sed.make_interps()
-emlines_grid = fast_sed.build_template_grid(interps)
+templates_grid = fast_sed.build_template_grid(interps, fast_sed.read_galaxy_template())
 filter_properties = model_colours.get_filters_properties()
 
 
@@ -81,7 +81,7 @@ if options["population_prior"].lower() == "histogram":
                                     y_cov = covariance, 
                                     redshift=redshift,
                                     m_i=m_i,
-                                    emlines_grid=emlines_grid,
+                                    templates_grid=templates_grid,
                                     filter_properties=filter_properties,
                                     n_steps=options["Nsteps"],
                                     parameter_scaler= parameter_scaler,
@@ -108,7 +108,7 @@ elif options["population_prior"].lower() == "normal":
                                     y_cov = covariance, 
                                     redshift=redshift,
                                     m_i=m_i,
-                                    emlines_grid=emlines_grid,
+                                    templates_grid=templates_grid,
                                     filter_properties=filter_properties,
                                     n_steps=options["Nsteps"],
                                     parameter_scaler= parameter_scaler,
@@ -135,7 +135,7 @@ elif options["population_prior"].lower() == "multivariate":
                                     y_cov = covariance, 
                                     redshift=redshift,
                                     m_i=m_i,
-                                    emlines_grid=emlines_grid,
+                                    templates_grid=templates_grid,
                                     filter_properties=filter_properties,
                                     n_steps=options["Nsteps"],
                                     parameter_scaler= parameter_scaler,

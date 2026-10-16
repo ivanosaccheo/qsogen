@@ -109,7 +109,7 @@ class GibbsSamplerBase(ABC):
         y_cov:  np.ndarray,
         redshift: np.ndarray,
         m_i: np.ndarray,
-        emlines_grid : dict,
+        templates_grid : dict,
         filter_properties,
         n_steps: int = 500,
         
@@ -138,7 +138,7 @@ class GibbsSamplerBase(ABC):
         self.y_cov = y_cov
         self.redshift = redshift
         self.m_i = m_i
-        self.emlines_grid = emlines_grid
+        self.templates_grid = templates_grid
         self.filter_properties = filter_properties
         self.n_steps = n_steps
         self.n_warmup = n_warmup
@@ -588,7 +588,7 @@ class GibbsSamplerBase(ABC):
         theta_cur = np.column_stack((self.redshift, physical_parameters_current, self.m_i))
         ll_current = fl.log_likelihood(
             theta_cur, self.y, self.y_precision, self.y_log_norm, self.y_valid_mask,
-            self.emlines_grid, self.filter_properties)
+            self.templates_grid, self.filter_properties)
         
         lp_current = self._log_prior(physical_parameters_current, internal_parameters_current)
         logpost_current = ll_current + lp_current
@@ -601,7 +601,7 @@ class GibbsSamplerBase(ABC):
             theta_cur[:, 1:-1] = physical_parameters_new
             ll_new = fl.log_likelihood(theta_cur, self.y, self.y_precision, 
                                     self.y_log_norm, self.y_valid_mask,
-                                    self.emlines_grid, self.filter_properties)
+                                    self.templates_grid, self.filter_properties)
             lp_new = self._log_prior(physical_parameters_new, internal_parameters_new)
             logpost_new = ll_new + lp_new
 

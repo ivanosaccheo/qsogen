@@ -49,8 +49,19 @@ def make_interps():
     return interps
 
 
+def read_galaxy_template():
+    maindir = os.path.expanduser("~/qsogen")
+    f1 = os.path.join(maindir,'S0_template_norm.sed')
+    return  np.genfromtxt(f1, )
+    
 
-def build_template_grid(interps, n_grid=8192):
+
+
+def build_template_grid(interps, 
+                        galaxy_template,
+                        n_grid=8192,
+                        n_gal_grid = 8192,
+                        n_gal_norm = 512):
     """Pre-interpolate emission-line templates onto a uniform log-wav grid.
 
     Parameters
@@ -64,10 +75,9 @@ def build_template_grid(interps, n_grid=8192):
     Returns
     -------
     grid : dict
-        Dictionary with keys:
-          'log_wav_min', 'log_wav_max', 'dlog'  — grid parameters
-          'med', 'pky', 'wdy', 'con'            — 1-D float64 arrays
-          'con_at_5500'                          — scalar float64
+              'log_wav_min', 'log_wav_max', 'dlog'  — grid parameters
+              'med', 'pky', 'wdy', 'con'            — 1-D float64 arrays
+              'con_at_5500'                          — scalar float64
     """
     # Determine the wavelength range from the template x-arrays.
     all_x = np.concatenate([interps[k].x for k in ('med', 'pky', 'wdy', 'con')])
@@ -92,17 +102,44 @@ def build_template_grid(interps, n_grid=8192):
 
     con_at_5500 = float(np.interp(5500.0, interps['con'].x, interps['con'].y))
 
+    gal_wav = galaxy_template[0,:]
+    gal_flux = galaxy_template[1,:]
+
+    gal_log_min = np.log(gal_wav.min())
+    gal_log_max = np.log(gal_wav.max())
+    gal_dlog = ((gal_log_max - gal_log_min) / (n_gal_grid - 1))
+    gal_grid_wav = np.exp(np.linspace(gal_log_min,gal_log_max,n_gal_grid))
+    gal_grid_flux = np.interp(gal_grid_wav,gal_wav,gal_flux)
+
+    # Grid used to normalise host in 4000-5000 A
+    gal_norm_wav = np.linspace(4000.0, 5000.0,n_gal_norm,endpoint=False)
+    gal_norm_flux = np.interp(gal_norm_wav, gal_wav,gal_flux)
+    galcnt = np.sum(gal_norm_flux)
+
     return dict(
+        # emission lines
         log_wav_min=log_min,
         log_wav_max=log_max,
         dlog=dlog,
         n_grid=n_grid,
+
         med=np.ascontiguousarray(med),
         pky=np.ascontiguousarray(pky),
         wdy=np.ascontiguousarray(wdy),
         con=np.ascontiguousarray(con),
         con_at_5500=con_at_5500,
+
+        # galaxy
+        gal_log_wav_min=gal_log_min,
+        gal_log_wav_max=gal_log_max,
+        gal_dlog=gal_dlog,
+        gal_n_grid=n_gal_grid,
+
+        gal_flux=np.ascontiguousarray(gal_grid_flux),
+        gal_norm_wav=np.ascontiguousarray(gal_norm_wav),
+        galcnt=float(galcnt),
     )
+
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +163,20 @@ def _grid_interp(log_wav, log_min, inv_dlog, n_grid, grid_vals):
     return grid_vals[i] + frac * (grid_vals[i + 1] - grid_vals[i])
 
 
+
+@njit(inline='always')
+def _grid_interp_clamped(log_wav, log_min, inv_dlog, n_grid, grid_vals):
+    """come _grid_interp ma alla fine del dominio non restituiscs Nan ma l'ultimo valore"""
+    t = (log_wav - log_min) * inv_dlog
+    if t <= 0.0:
+        return grid_vals[0]
+    if t >= n_grid - 1:
+        return grid_vals[n_grid - 1]
+    i = int(t)
+    frac = t - i
+    return grid_vals[i] + frac * (grid_vals[i + 1] - grid_vals[i])
+    
+
 # ---------------------------------------------------------------------------
 # Numba helper: tau_eff (Becker+ 2013)
 # ---------------------------------------------------------------------------
@@ -140,13 +191,111 @@ def _tau_eff(z):
 # Main fused Numba kernel
 # ---------------------------------------------------------------------------
 
+@njit(inline="always")
+def _qso_flux_pre_igm(
+                    rest_wav,
+                    # continuum parameters for this object
+                    wavbrk3,
+                    wb1_n,
+                    s1_n,
+                    s2_n,
+                    s3_n,
+                    log_C1,
+                    log_C2,
+                    log_C3,
+                    # black body
+                    tbb_n,
+                    bb_norm_val,
+                    # emission lines
+                    w_med,
+                    w_pky,
+                    w_wdy,
+                    scalin,
+                    continuum_norm,
+                    # emission-line template grid
+                    log_min,
+                    inv_dlog,
+                    n_grid,
+                    grid_med,
+                    grid_pky,
+                    grid_wdy,
+                    grid_con,
+                    ):
+    
+    hc_over_k = 1.43877735e8
+    log_rw = np.log(rest_wav)
+
+    # Continuum
+    if rest_wav < wavbrk3:
+        slope = s3_n
+        log_c = log_C3
+    elif rest_wav >= wb1_n:
+        slope = s2_n
+        log_c = log_C2
+    else:
+        slope = s1_n
+        log_c = log_C1
+
+    f_nu = np.exp(log_c + slope * log_rw)
+    # Black body
+    exponent = hc_over_k / (rest_wav * tbb_n)
+    if exponent < 500.0:
+        bb_denom = np.exp(exponent) - 1.0
+        if bb_denom > 0.0:
+            f_nu += (bb_norm_val/ (rest_wav**3 * bb_denom))
+
+
+    # f_nu -> f_lambda
+    f_lam = f_nu / (rest_wav * rest_wav)
+    
+    # Emission lines
+
+    med_val = _grid_interp(log_rw, log_min,inv_dlog,n_grid,grid_med)
+    pky_val = _grid_interp(log_rw,log_min, inv_dlog, n_grid, grid_pky)
+    wdy_val = _grid_interp(log_rw, log_min, inv_dlog, n_grid, grid_wdy)
+    con_val = _grid_interp(log_rw, log_min, inv_dlog, n_grid, grid_con)
+    linval = w_med * med_val + w_pky * pky_val + w_wdy * wdy_val
+ 
+    #Clamp negative values
+    if linval < 0.0:
+        if (4930.0 < rest_wav < 5030.0) or (1150.0 < rest_wav < 1200.0):
+            linval = 0.0
+
+    # emission-line scaling
+
+    f_line = 0.0
+
+    if con_val > 0.0:
+        if scalin < 0.0:
+            # EW preserving
+            f_line = -scalin * linval * (f_lam / con_val)
+
+        elif scalin > 0.0:
+            # intensity preserving
+            f_line = scalin * linval * continuum_norm
+
+    f_lam += f_line
+    if f_lam < 0.0:
+        f_lam = 0.0
+    
+    return f_lam       
+ 
+
+
 @njit(parallel=True, cache=True)
 def _sed_kernel(
-    redshift, s1_neg, s2_neg, wb1, tbb, bbnorm, M_i,
+    redshift, s1_neg, s2_neg, wb1, tbb, bbnorm, fragal, gplind, M_i,
+    
     obs_wavs,
+    #Lines
     log_min, inv_dlog, n_grid,
     grid_med, grid_pky, grid_wdy, grid_con,
     con_at_5500,
+    #host
+    gal_log_min, gal_inv_dlog, gal_n_grid,
+    gal_flux_grid, gal_norm_wav, galcnt,
+    gflag,
+
     out,
     constants
     ):
@@ -192,6 +341,8 @@ def _sed_kernel(
     scalin = constants[3]
     beslope = constants[4]
     benrm = constants[5]
+    # Host gal fixed parameters
+    galnrm = constants[6]
 
     for n in prange(N):
         z_n = redshift[n]
@@ -201,6 +352,8 @@ def _sed_kernel(
         wb1_n = wb1[n]
         tbb_n = tbb[n]
         bbn_n = bbnorm[n]
+        fragal_n = fragal[n]
+        gplind_n = gplind[n]
         mi_n = M_i[n]
         inv_1pz = 1.0 / (1.0 + z_n)
 
@@ -256,61 +409,102 @@ def _sed_kernel(
             w_pky = 0.0
             w_wdy = 0.0
 
+        # Host-galaxy normalisation
+        # ======================================================
+        host_amp = 0.0
+
+        if gflag:
+            if fragal_n > 0.0:
+                qsocnt = 0.0
+                # Evaluate QSO spectrum over the fixed
+                # rest-frame 4000-5000 A normalisation region.
+                for h in range(gal_norm_wav.shape[0]):
+                    rw = gal_norm_wav[h]
+                    qsocnt += _qso_flux_pre_igm(
+                                                rw,
+
+                                                wavbrk3,
+                                                wb1_n,
+                                                s1_n,
+                                                s2_n,
+                                                s3_n,
+                                                log_C1,
+                                                log_C2,
+                                                log_C3,
+
+                                                tbb_n,
+                                                bb_norm_val,
+
+                                                w_med,
+                                                w_pky,
+                                                w_wdy,
+                                                scalin,
+                                                continuum_norm,
+
+                                                log_min,
+                                                inv_dlog,
+                                                n_grid,
+                                                grid_med,
+                                                grid_pky,
+                                                grid_wdy,
+                                                grid_con,)
+
+                # Normalize galaxy template to the QSO flux over 4000-5000 A.
+                if galcnt > 0.0:
+                    cscale = qsocnt / galcnt
+                else:
+                    cscale = 0.0
+                # Luminosity dependence
+
+
+                vallum = 10.0 ** (-0.4* (mi_n - galnrm))
+                tscale = vallum ** (gplind_n - 1.0)
+                scagal = fragal_n / (1.0 - fragal_n) * tscale
+                host_amp = cscale * scagal
+            
         for m in range(M):
             rest_wav = obs_wavs[m] * inv_1pz
-            log_rw = np.log(rest_wav)
+            f_lam = _qso_flux_pre_igm(
+                                    rest_wav,
 
-            # --- Continuum (power-law) ---
-            if rest_wav < wavbrk3:
-                slope = s3_n 
-                log_c = log_C3
-            elif rest_wav >= wb1_n:
-                slope = s2_n
-                log_c = log_C2
-            else:
-                slope = s1_n
-                log_c = log_C1
+                                    wavbrk3,
+                                    wb1_n,
+                                    s1_n,
+                                    s2_n,
+                                    s3_n,
+                                    log_C1,
+                                    log_C2,
+                                    log_C3,
 
-            f_nu = np.exp(log_c + slope * log_rw)
+                                    tbb_n,
+                                    bb_norm_val,
 
-            # --- Blackbody ---
-            exponent = hc_over_k / (rest_wav * tbb_n)
-            if exponent < 500.0:
-                bb_denom = np.exp(exponent) - 1.0
-                f_nu += bb_norm_val / (rest_wav ** 3 * bb_denom)
+                                    w_med,
+                                    w_pky,
+                                    w_wdy,
+                                    scalin,
+                                    continuum_norm,
 
-            # --- Convert f_nu -> f_lambda ---
-            f_lam = f_nu / (rest_wav * rest_wav)
+                                    log_min,
+                                    inv_dlog,
+                                    n_grid,
+                                    grid_med,
+                                    grid_pky,
+                                    grid_wdy,
+                                    grid_con,)
+            
+            # --- Host Galaxy ---
+            if gflag and host_amp != 0.0:
 
-            # --- Emission lines ---
-            med_val = _grid_interp(log_rw, log_min, inv_dlog, n_grid, grid_med)
-            pky_val = _grid_interp(log_rw, log_min, inv_dlog, n_grid, grid_pky)
-            wdy_val = _grid_interp(log_rw, log_min, inv_dlog, n_grid, grid_wdy)
-            con_val = _grid_interp(log_rw, log_min, inv_dlog, n_grid, grid_con)
+                gal_val = _grid_interp_clamped(
+                                            np.log(rest_wav),
+                                            gal_log_min,
+                                            gal_inv_dlog,
+                                            gal_n_grid,
+                                            gal_flux_grid)
 
-            # Blend templates
-            linval = w_med * med_val + w_pky * pky_val + w_wdy * wdy_val
-
-            # Clamp negative dips in specific regions
-            if linval < 0.0:
-                if (rest_wav > 4930.0 and rest_wav < 5030.0) or \
-                   (rest_wav > 1150.0 and rest_wav < 1200.0):
-                    linval = 0.0
-
-            # Line scaling: scalin < 0 => EW-preserving (local continuum),
-            #               scalin >= 0 => fixed scaling relative to cont_norm_wav
-            if con_val > 0.0:
-                if scalin < 0.0:
-                    f_line = -scalin * linval * (f_lam / con_val)
-                elif scalin >0:
-                    f_line = scalin * linval * continuum_norm
-                else:
-                    f_line > 0
-            else:
-                f_line = 0.0
-
-            f_lam += f_line
-
+                f_lam += host_amp * gal_val
+            
             # --- IGM Lyman forest absorption ---
             tau_total = 0.0
             if rest_wav < lylim:
@@ -336,23 +530,27 @@ def _sed_kernel(
 # Public API
 # ---------------------------------------------------------------------------
 
-def fast_quasar_sed(theta, obs_wavs, 
-                    emlines_grid,
+def fast_quasar_sed(theta, 
+                    obs_wavs, 
+                    templates_grid,
                     wavbrk3 = 1200,
-                    plslp3_step = -1,
+                    plslp3_step = -1.0,
                     scalin = -0.993,
                     beslope = 0.183,
                     benrm = -27.0,
-                    cont_norm_wav = 5500.0):
+                    cont_norm_wav = 5500.0,
+                    galnrm=-23.0,
+                    gflag = True
+                    ):
     """Optimized replacement for fast_quasar_sed_for_fitting.
 
     Parameters
     ----------
-    theta : ndarray, shape (N, 7)
-        Each row: [redshift, plslp1, plslp2, wavbrk1, tbb, bbnorm, M_i].
+    theta : ndarray, shape (N, 9)
+        Each row: [redshift, plslp1, plslp2, wavbrk1, tbb, bbnorm, fragal, gplind,  M_i].
     obs_wavs : ndarray, shape (M,)
         Observed-frame wavelengths (Angstroms).
-    grid : dict
+    templates_grid : dict
         Output of build_template_grid().
 
     Returns
@@ -373,9 +571,13 @@ def fast_quasar_sed(theta, obs_wavs,
     wb1 = theta[:, 3]
     tbb = theta[:, 4]
     bbn = theta[:, 5]
-    mi = theta[:, 6]
+    fragal = theta[:,6]
+    gplind = theta[:,7]
+    mi = theta[:, 8]
 
-    inv_dlog = 1.0 / emlines_grid['dlog']
+    inv_dlog = 1.0 / templates_grid['dlog']
+
+    gal_inv_dlog = 1.0 / templates_grid["gal_dlog"]
 
     constants = (wavbrk3,
                 plslp3_step,
@@ -383,27 +585,41 @@ def fast_quasar_sed(theta, obs_wavs,
                 scalin,
                 beslope,
                 benrm,
+                galnrm,
                 )
-
     _sed_kernel(
-        redshift, s1_neg, s2_neg, wb1, tbb, bbn, mi,
+        redshift, s1_neg, s2_neg, wb1, tbb, bbn, fragal, gplind, mi,
         obs_wavs,
-        emlines_grid['log_wav_min'], inv_dlog, emlines_grid['n_grid'],
-        emlines_grid['med'], emlines_grid['pky'], emlines_grid['wdy'], emlines_grid['con'],
-        emlines_grid['con_at_5500'],
+        templates_grid['log_wav_min'], 
+        inv_dlog, 
+        templates_grid['n_grid'],
+        templates_grid['med'], 
+        templates_grid['pky'], 
+        templates_grid['wdy'], 
+        templates_grid['con'],
+        templates_grid['con_at_5500'],
+        templates_grid["gal_log_wav_min"],
+        gal_inv_dlog,
+        templates_grid["gal_n_grid"],
+        templates_grid["gal_flux"],
+        templates_grid["gal_norm_wav"],
+        templates_grid["galcnt"],
+        gflag,
         out, constants,
     )
 
     return out
 
 
-def get_colours_fast(theta, emlines_grid, filters_properties,
+def get_colours_fast(theta, templates_grid, filters_properties,
                     wavbrk3 = 1200,
                     plslp3_step = -1,
                     scalin = -0.9936,
                     beslope = 0.183,
                     benrm = -27.0,
-                    cont_norm_wav = 5500.0
+                    cont_norm_wav = 5500.0,
+                    galnrm=-23.0,
+                    gflag = True,
                     ):
     """Drop-in replacement for model_colours.get_colours_fast.
 
@@ -420,13 +636,15 @@ def get_colours_fast(theta, emlines_grid, filters_properties,
     colours : ndarray, shape (N, n_filters - 1)
     """
     obs_wav_sorted, sparse_W_T = filters_properties
-    ordered_flux = fast_quasar_sed(theta, obs_wav_sorted, emlines_grid,
+    ordered_flux = fast_quasar_sed(theta, obs_wav_sorted, templates_grid,
                                 wavbrk3 =  wavbrk3,
                                 plslp3_step = plslp3_step,
                                 scalin = scalin,
                                 beslope = beslope,
                                 benrm = benrm,
-                                cont_norm_wav = cont_norm_wav)
+                                cont_norm_wav = cont_norm_wav,
+                                galnrm=galnrm,
+                                gflag = gflag)
     with np.errstate(divide='ignore', invalid='ignore'):
         mag_flux = ordered_flux @ sparse_W_T
         mags = -2.5 * np.log10(mag_flux)

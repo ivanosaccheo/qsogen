@@ -567,7 +567,6 @@ def get_filters_properties_old(filters =['SDSS_u_AB',
     return waves, responses, zero_points, obs_wavlen, order, isort, split_indices, integration_weights
 
 
-
 def get_colours_fast(theta, interps, filters_properties):
     """theta =(N,7), [redshift, plslp1, plslp2, wavbrk1, tbb, bbnorm, M_i])"""
     obs_wav_sorted, sparse_W_T = filters_properties
